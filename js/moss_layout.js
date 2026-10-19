@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// The visual editor and interaction model adapt patterns from DENO Ideogram Director
+// The visual editor and interaction model adapt patterns shared by Deno2026
 // (https://github.com/Deno2026/comfyui-deno-custom-nodes), under GPL-3.0-only.
 // This frontend has been modified for MOSS-Image layout composition.
 import { app } from "/scripts/app.js";
@@ -1005,3 +1005,4 @@ app.registerExtension({
     }
   },
 });
+
