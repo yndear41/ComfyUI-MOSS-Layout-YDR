@@ -39,4 +39,5 @@ The workflows do not include model checkpoints. Install the models required by y
 
 ## Credit and license
 
-The visual editor builds on interaction patterns from [DENO Ideogram Director](https://github.com/Deno2026/comfyui-deno-custom-nodes). Thanks to Deno2026 and the contributors for sharing their work. This project is licensed under **GPL-3.0-only**; see [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+The visual editor builds on patterns from [Deno2026's ComfyUI custom nodes](https://github.com/Deno2026/comfyui-deno-custom-nodes). Thank you, Deno2026, for sharing this work as open source. This project is licensed under **GPL-3.0-only**; see [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
