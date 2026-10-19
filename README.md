@@ -11,8 +11,7 @@ A visual layout editor for MOSS-Image in ComfyUI. Draw regions on the image, des
 - Draw and edit boxes for characters, objects, and text.
 - Add descriptions, optional visible text, and color palettes.
 - Choose the canvas size in the node or connect width, height, and megapixels from other nodes.
-- Import a MOSS layout from JSON or text.
-- Save the whole editor state with the workflow, including boxes and fields.
+- Import a MOSS layout from JSON or text. (corrupted maybe)
 - Use the latest generated image as a preview, or connect an optional background image.
 
 ## Install
