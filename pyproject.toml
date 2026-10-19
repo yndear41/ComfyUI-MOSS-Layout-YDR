@@ -1,7 +1,7 @@
 [project]
-name = "comfyui-moss-layout-ydr"
+name = "moss-layout-ydr"
 version = "0.1.0"
-description = "Visual ComfyUI node for composing MOSS-Image layout prompts"
+description = "Visual layout editor for MOSS-Image prompts with interactive boxes and canvas controls"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
@@ -14,3 +14,13 @@ classifiers = [
     "Programming Language :: JavaScript",
 ]
 keywords = ["ComfyUI", "MOSS-Image", "layout", "prompt", "bounding-box"]
+
+[project.urls]
+Repository = "https://github.com/yndear41/ComfyUI-MOSS-Layout-YDR"
+Documentation = "https://github.com/yndear41/ComfyUI-MOSS-Layout-YDR#readme"
+"Bug Tracker" = "https://github.com/yndear41/ComfyUI-MOSS-Layout-YDR/issues"
+
+[tool.comfy]
+PublisherId = "yndear41"
+DisplayName = "MOSS Layout YDR"
+
