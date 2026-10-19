@@ -1,8 +1,8 @@
-# Example workflows
+# Example workflow
 
-Open either JSON file in ComfyUI after installing MOSS Layout YDR and the MOSS-Image nodes. The first workflow contains a saved layout and connects the editor directly to MOSS generation. The second is an additional complete MOSS workflow.
+Open [`moss-layout-ydr-moss-workflow.json`](moss-layout-ydr-moss-workflow.json) in ComfyUI after installing MOSS Layout YDR and the MOSS-Image nodes. This is the workflow supplied for the project, with its original graph and saved node state.
 
-The workflows do not require the demonstration image in this folder. Model checkpoints and any other custom nodes required by the MOSS graph must be installed separately.
+Model checkpoints and any other custom nodes required by the workflow must be installed separately.
 
 The visual editor patterns are credited to Deno2026. See [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 
