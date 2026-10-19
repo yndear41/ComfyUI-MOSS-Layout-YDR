@@ -975,7 +975,6 @@ app.registerExtension({
       window.removeEventListener("moss-layout-refresh-background",onBackgroundRefresh);
       window.clearInterval(backgroundRefreshTimer);
       if (node.onConnectionsChange !== previousOnConnectionsChange) node.onConnectionsChange = previousOnConnectionsChange;
-      if (node.onResize === onNodeResize) node.onResize = previousOnResize;
       if (resizeFrame) cancelAnimationFrame(resizeFrame);
       if (showHelp) showHelp.remove();
       if (activeLayoutDelete === deleteSelectedBox) activeLayoutDelete = null;
