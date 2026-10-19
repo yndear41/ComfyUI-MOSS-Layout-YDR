@@ -23,4 +23,5 @@
 - Export schema-aligned layout JSON and width, height, and bounding-box outputs.
 - Support ComfyUI Legacy and Node 2.0 frontends.
 - Add background preview handling, aspect-ratio and megapixel sizing, color palettes, and text/JSON import.
-- Include GPL-3.0-only licensing and third-party attribution for adaptations from DENO Ideogram Director.
+- Include GPL-3.0-only licensing and attribution for visual-editor patterns shared by Deno2026.
+
