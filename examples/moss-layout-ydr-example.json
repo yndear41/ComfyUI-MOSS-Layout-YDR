@@ -257,7 +257,7 @@
         },
         {
           "type": "IMAGE",
-          "link": 76,
+          "link": null,
           "name": "background",
           "shape": 7
         },
@@ -380,10 +380,10 @@
       "outputs": [],
       "properties": {},
       "widgets_values": [
-        "## MOSS Layout YDR example`n`nThe reference image is connected to the editor background only. It does not condition generation.`n`nThe layout node sends its compiled prompt and canvas dimensions directly to the MOSS generation subgraph. Prompt enhancement is disabled to preserve the box instructions. Copy the included image to ComfyUI/input and select it in Load Image if ComfyUI cannot resolve the sample path."
+        "## MOSS Layout YDR example\n\nThis workflow uses the saved layout and connects its prompt and canvas dimensions directly to MOSS-Image generation. Prompt enhancement is disabled to preserve the box instructions. Model checkpoints are not included."
       ],
       "widgets_values_named": {
-        "text": "## MOSS Layout YDR example`n`nThe reference image is connected to the editor background only. It does not condition generation.`n`nThe layout node sends its compiled prompt and canvas dimensions directly to the MOSS generation subgraph. Prompt enhancement is disabled to preserve the box instructions. Copy the included image to ComfyUI/input and select it in Load Image if ComfyUI cannot resolve the sample path."
+        "text": "## MOSS Layout YDR example\n\nThis workflow uses the saved layout and connects its prompt and canvas dimensions directly to MOSS-Image generation. Prompt enhancement is disabled to preserve the box instructions. Model checkpoints are not included."
       },
       "color": "#222",
       "bgcolor": "#000"
@@ -423,47 +423,6 @@
       },
       "widgets_values": [],
       "widgets_values_named": {}
-    },
-    {
-      "widgets_values_named": {
-        "image": "moss-layout-example.png",
-        "upload": "image"
-      },
-      "type": "LoadImage",
-      "size": [
-        315,
-        314
-      ],
-      "inputs": [],
-      "properties": {
-        "Node name for S&R": "LoadImage"
-      },
-      "pos": [
-        -1130,
-        10
-      ],
-      "id": 38,
-      "outputs": [
-        {
-          "type": "IMAGE",
-          "name": "IMAGE",
-          "links": [
-            76
-          ]
-        },
-        {
-          "type": "MASK",
-          "name": "MASK",
-          "links": null
-        }
-      ],
-      "mode": 0,
-      "widgets_values": [
-        "moss-layout-example.png",
-        "image"
-      ],
-      "order": 3,
-      "flags": {}
     }
   ],
   "links": [
@@ -482,14 +441,6 @@
       18,
       0,
       "STRING"
-    ],
-    [
-      76,
-      38,
-      0,
-      34,
-      1,
-      "IMAGE"
     ],
     [
       77,
@@ -1992,3 +1943,4 @@
   },
   "version": 0.4
 }
+
