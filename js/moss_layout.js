@@ -275,7 +275,6 @@ app.registerExtension({
       const nodeHeight = Number(node.size?.[1]) || 580;
       return [Math.max(220, nodeWidth - 18), Math.max(180, nodeHeight - 38)];
     };
-    const previousOnResize = node.onResize;
     let resizeFrame = 0;
     const syncBoardSize = () => {
       const [width, height] = getBoardSize();
@@ -284,27 +283,24 @@ app.registerExtension({
       node.setDirtyCanvas?.(true, true);
       app.graph?.setDirtyCanvas?.(true, true);
     };
-    const onNodeResize = function (...args) {
-      const result = previousOnResize?.apply(this, args);
+    const scheduleBoardSizeSync = () => {
       syncBoardSize();
       if (resizeFrame) cancelAnimationFrame(resizeFrame);
       resizeFrame = requestAnimationFrame(() => {
         resizeFrame = 0;
         syncBoardSize();
       });
-      return result;
     };
-    const domWidget = node.addDOMWidget(WIDGET, "MOSS_LAYOUT_EDITOR", root, {
+    node.addDOMWidget(WIDGET, "MOSS_LAYOUT_EDITOR", root, {
       serialize: false,
       hideOnZoom: false,
       getMinHeight: () => 180,
       getHeight: () => "100%",
-      afterResize: syncBoardSize,
+      afterResize: scheduleBoardSizeSync,
     });
-    // Keep a small, stable Legacy minimum so the widget never prevents node shrinking.
-    // The visible DOM board itself follows node.size via the resize hooks above.
-    domWidget.computeSize = () => [220, 180];
-    node.onResize = onNodeResize;
+    // Keep a small Legacy minimum, but let LiteGraph allocate the widget's actual
+    // height from the node's remaining body space. A computeSize override makes
+    // the DOM widget a fixed-height row and lets the editor spill below the node.
     syncBoardSize();
 
     const $ = (selector) => root.querySelector(selector);
