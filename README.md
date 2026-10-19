@@ -11,7 +11,8 @@ A visual layout editor for MOSS-Image in ComfyUI. Draw regions on the image, des
 - Draw and edit boxes for characters, objects, and text.
 - Add descriptions, optional visible text, and color palettes.
 - Choose the canvas size in the node or connect width, height, and megapixels from other nodes.
-- Import a MOSS layout from JSON or text. (corrupted maybe)
+- Import a MOSS layout from JSON or text.
+- Save the whole editor state with the workflow, including boxes and fields.
 - Use the latest generated image as a preview, or connect an optional background image.
 
 ## Install
@@ -29,12 +30,11 @@ You can also connect the outputs to ComfyUI's built-in **MOSS-Image Layout Promp
 - `width` and `height` → the matching size inputs
 - `character_boxes` → `character_boxes`
 
-## Example workflows
+## Example workflow
 
-- [`moss-layout-ydr-example.json`](examples/moss-layout-ydr-example.json) — a ready-to-open example with a saved layout.
-- [`moss-layout-ydr-moss-workflow.json`](examples/moss-layout-ydr-moss-workflow.json) — an additional MOSS workflow.
+- [`moss-layout-ydr-moss-workflow.json`](examples/moss-layout-ydr-moss-workflow.json) — the workflow supplied for this project, with its saved MOSS Layout YDR state.
 
-The workflows do not include model checkpoints. Install the models required by your ComfyUI MOSS-Image setup.
+The workflow does not include model checkpoints. Install the models required by your ComfyUI MOSS-Image setup.
 
 ## Credit and license
 
