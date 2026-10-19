@@ -4,4 +4,5 @@ Open either JSON file in ComfyUI after installing MOSS Layout YDR and the MOSS-I
 
 The workflows do not require the demonstration image in this folder. Model checkpoints and any other custom nodes required by the MOSS graph must be installed separately.
 
-The visual editor patterns are credited to DENO Ideogram Director. See [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
+The visual editor patterns are credited to Deno2026. See [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
+
