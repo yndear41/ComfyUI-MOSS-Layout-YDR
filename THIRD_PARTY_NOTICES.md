@@ -1,10 +1,10 @@
 # Third-Party Notices
 
-## DENO Ideogram Director
+## Attribution to Deno2026
 
-MOSS Layout YDR adapts the visual-editor layout and interaction patterns of DENO Ideogram Director, part of [DENO Custom Nodes for ComfyUI](https://github.com/Deno2026/comfyui-deno-custom-nodes). The adapted areas include the canvas-based region editor, region-editing interactions, side-panel organization, and palette-editing workflow. They have been changed for MOSS-Image layout composition and this node's data model.
+MOSS Layout YDR draws on the canvas and palette interaction patterns in [Deno2026's ComfyUI custom nodes repository](https://github.com/Deno2026/comfyui-deno-custom-nodes). These patterns have been adapted for MOSS-Image layout composition and this node's data model.
 
-The upstream project identifies Deno-owned nodes, documentation, examples, workflows, and project-local assets as **GPL-3.0-only**. The upstream license and project statement are available in the [DENO repository](https://github.com/Deno2026/comfyui-deno-custom-nodes) and its [README license section](https://github.com/Deno2026/comfyui-deno-custom-nodes#license).
+The repository identifies its node code, documentation, examples, workflows, and project assets as **GPL-3.0-only**. The license information is available in [Deno2026's repository](https://github.com/Deno2026/comfyui-deno-custom-nodes) and its [README license section](https://github.com/Deno2026/comfyui-deno-custom-nodes#license).
 
 This distribution is consequently provided under GPL-3.0-only. The full license text is included in [LICENSE](LICENSE). MOSS Layout YDR is an independent ComfyUI node and is not affiliated with or endorsed by Deno2026.
 
@@ -38,4 +38,5 @@ SOFTWARE.
 
 ## Example reference image
 
-[`examples/assets/moss-layout-example.png`](examples/assets/moss-layout-example.png) was supplied by the project maintainer for this example workflow. It is a reference-only image loaded into the editor background; it is not a MOSS, Comfy-Org, or DENO asset. The repository's GPL notice does not claim ownership of this image, and this notice does not grant a separate license for it; its distribution rights remain with its copyright holder.
+[`examples/assets/moss-layout-example.png`](examples/assets/moss-layout-example.png) was supplied by the project maintainer as a README demonstration image; it is not part of the example workflow or model input. The repository's GPL notice does not claim ownership of this image, and this notice does not grant a separate license for it; its distribution rights remain with its copyright holder.
+
