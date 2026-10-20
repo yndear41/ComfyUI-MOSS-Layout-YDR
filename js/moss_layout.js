@@ -96,30 +96,68 @@ function openColorPopover(anchor, onAdd, recentColors = []) {
   activeColorPopoverClose?.();
   const pop = document.createElement("div");
   pop.className = "mb-color-popover";
-  pop.innerHTML = `<button class="mb-pop-close" type="button" title="Close" aria-label="Close">×</button><label>Choose a color</label><input class="mb-pop-color" type="color" value="#b4c0c5"><button class="mb-pop-add" type="button">＋ Add</button><div class="mb-recent-colors" aria-label="Recently used colors"></div>`;
+  pop.innerHTML = `<button class="mb-pop-close" type="button" title="Close" aria-label="Close">×</button><label>Choose color</label><div class="mb-picker-plane" role="application" aria-label="Color saturation and brightness"><span class="mb-picker-handle"></span></div><div class="mb-picker-hue-row"><span>Hue</span><input class="mb-picker-hue" type="range" min="0" max="360" value="195" aria-label="Hue"></div><div class="mb-picker-value-row"><span class="mb-picker-preview"></span><input class="mb-picker-hex" type="text" value="#b4c0c5" maxlength="7" aria-label="Hex color"><button class="mb-pop-add" type="button">＋ Add</button></div><div class="mb-recent-colors" aria-label="Recently used colors"></div>`;
   const recentHost = pop.querySelector(".mb-recent-colors");
-  recentColors.slice(0, 10).forEach((color) => {
+  let hue = 195, saturation = 0.08, brightness = 0.77, pickedColor = "#b4c0c5";
+  const hsvToHex = (h, s, v) => {
+    const c = v * s, x = c * (1 - Math.abs((h / 60) % 2 - 1)), m = v - c;
+    const rgb = h < 60 ? [c,x,0] : h < 120 ? [x,c,0] : h < 180 ? [0,c,x] : h < 240 ? [0,x,c] : h < 300 ? [x,0,c] : [c,0,x];
+    return `#${rgb.map((value) => Math.round((value + m) * 255).toString(16).padStart(2,"0")).join("")}`;
+  };
+  const setColor = (color) => {
     if (!/^#[0-9a-f]{6}$/i.test(color)) return;
+    pickedColor = color.toLowerCase();
+    const [r,g,b] = [1,3,5].map((offset) => parseInt(pickedColor.slice(offset,offset+2),16)/255);
+    const max = Math.max(r,g,b), min = Math.min(r,g,b), delta = max - min;
+    hue = delta === 0 ? hue : max === r ? 60 * (((g-b)/delta) % 6) : max === g ? 60 * ((b-r)/delta+2) : 60 * ((r-g)/delta+4);
+    if (hue < 0) hue += 360;
+    saturation = max === 0 ? 0 : delta/max; brightness = max;
+    syncPicker();
+  };
+  const syncPicker = () => {
+    pop.querySelector(".mb-picker-plane").style.backgroundColor = `hsl(${hue} 100% 50%)`;
+    pop.querySelector(".mb-picker-handle").style.left = `${saturation*100}%`;
+    pop.querySelector(".mb-picker-handle").style.top = `${(1-brightness)*100}%`;
+    pop.querySelector(".mb-picker-hue").value = String(Math.round(hue));
+    pop.querySelector(".mb-picker-hex").value = pickedColor;
+    pop.querySelector(".mb-picker-preview").style.backgroundColor = pickedColor;
+  };
+  const setFromPlane = (event) => {
+    const rect = pop.querySelector(".mb-picker-plane").getBoundingClientRect();
+    saturation = Math.max(0,Math.min(1,(event.clientX-rect.left)/rect.width));
+    brightness = 1-Math.max(0,Math.min(1,(event.clientY-rect.top)/rect.height));
+    pickedColor = hsvToHex(hue,saturation,brightness); syncPicker();
+  };
+  const plane = pop.querySelector(".mb-picker-plane");
+  plane.addEventListener("pointerdown",(event)=>{event.preventDefault();plane.setPointerCapture(event.pointerId);setFromPlane(event);});
+  plane.addEventListener("pointermove",(event)=>{if(event.buttons&1)setFromPlane(event);});
+  pop.querySelector(".mb-picker-hue").addEventListener("input",(event)=>{hue=Number(event.currentTarget.value);pickedColor=hsvToHex(hue,saturation,brightness);syncPicker();});
+  pop.querySelector(".mb-picker-hex").addEventListener("input",(event)=>setColor(event.currentTarget.value));
+  syncPicker();
+  for (let index = 0; index < 10; index++) {
+    const color = recentColors[index];
     const swatch = document.createElement("button");
     swatch.type = "button"; swatch.className = "mb-recent-swatch"; swatch.style.backgroundColor = color;
-    swatch.title = `Use ${color}`; swatch.setAttribute("aria-label", `Use color ${color}`);
-    swatch.addEventListener("click", () => { onAdd(color); close(); });
+    if (/^#[0-9a-f]{6}$/i.test(color || "")) {
+      swatch.title = `Select ${color}`; swatch.setAttribute("aria-label", `Select color ${color}`);
+      swatch.addEventListener("click", () => setColor(color));
+    } else {
+      swatch.disabled = true; swatch.classList.add("is-empty"); swatch.title = "No recent color"; swatch.setAttribute("aria-label", "Empty recent color slot");
+    }
     recentHost.append(swatch);
-  });
+  }
   document.body.append(pop);
   const rect = anchor.getBoundingClientRect();
-  const popWidth = 210, popHeight = 154;
-  pop.style.left = `${Math.max(8, Math.min(innerWidth - popWidth - 8, rect.left))}px`;
-  pop.style.top = `${rect.bottom + popHeight + 8 < innerHeight ? rect.bottom + 6 : Math.max(8, rect.top - popHeight - 6)}px`;
+  const popRect = pop.getBoundingClientRect();
+  pop.style.left = `${Math.max(8, Math.min(innerWidth - popRect.width - 8, rect.left))}px`;
+  pop.style.top = `${rect.bottom + popRect.height + 8 < innerHeight ? rect.bottom + 6 : Math.max(8, rect.top - popRect.height - 6)}px`;
   const close = () => { document.removeEventListener("pointerdown", outside, true); pop.remove(); if (activeColorPopoverClose === close) activeColorPopoverClose = null; };
   const outside = (event) => { if (!pop.contains(event.target) && event.target !== anchor) close(); };
   document.addEventListener("pointerdown", outside, true);
   activeColorPopoverClose = close;
   pop.addEventListener("pointerdown", (event) => event.stopPropagation());
   pop.querySelector(".mb-pop-close").onclick = close;
-  pop.querySelector(".mb-pop-add").onclick = () => { onAdd(pop.querySelector(".mb-pop-color").value); close(); };
-  const colorInput = pop.querySelector(".mb-pop-color");
-  try { if (colorInput.showPicker) colorInput.showPicker(); else colorInput.click(); } catch { colorInput.click(); }
+  pop.querySelector(".mb-pop-add").onclick = () => { onAdd(pickedColor); close(); };
 }
 
 let activeColorPopoverClose = null;
@@ -228,7 +266,7 @@ app.registerExtension({
     root.title = "Compose a MOSS-Image layout prompt. Draw regions, then double-click a box to edit it.";
     root.innerHTML = `
       <div class="mb-head">
-        <div class="mb-control"><label title="Choose the canvas proportions. Box geometry is kept in pixel space when the canvas changes size.">Aspect ratio</label><select class="mb-ratio"></select></div>
+        <div class="mb-control"><label title="Choose the generation field proportions. The working field and box positions stay fixed.">Aspect ratio</label><select class="mb-ratio"></select></div>
         <button class="mb-swap" title="Swap landscape and portrait orientation" aria-label="Swap orientation">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h14m0 0-3-3m3 3-3 3M20 17H6m0 0 3-3m-3 3 3 3"/><path d="m7 4 10 16"/></svg>
         </button>
@@ -264,30 +302,35 @@ app.registerExtension({
       .mb-modal-shade{position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.52);display:grid;place-items:center}.mb-modal{position:relative;width:min(420px,calc(100vw - 28px));max-height:calc(100vh - 28px);overflow:auto;background:#14191b;border:1px solid rgba(255,255,255,.12);border-radius:10px;box-shadow:0 14px 44px #0009;padding:14px;color:#d3d8da;font:12px/1.45 "Segoe UI",system-ui,sans-serif}.mb-modal h3{margin:0 30px 9px 0;font-size:14px;font-weight:600}.mb-modal label{display:block;color:#b5bec1;margin:10px 0 4px}.mb-modal select,.mb-modal input,.mb-modal textarea{width:100%;background:#1b2022;color:#d3d8da;border:1px solid rgba(255,255,255,.12);border-radius:6px;padding:7px;font:inherit}.mb-modal textarea{min-height:70px;resize:vertical}.mb-modal .mb-exact{min-height:56px}.mb-modal .mb-modal-help{color:#8e999c;font-size:10px;margin-top:4px}.mb-modal .mb-modal-buttons{display:flex;justify-content:space-between;gap:7px;margin-top:13px}.mb-modal button{background:#202629;color:#cbd4d7;border:1px solid var(--line);border-radius:6px;padding:6px 10px;cursor:pointer}.mb-modal button.primary{background:linear-gradient(#b2c0c4,#7e9096);color:#111719;border:0;font-weight:600}.mb-modal button.danger{color:#df9696}.mb-modal .mb-modal-close{position:absolute;right:8px;top:7px;width:23px;height:23px;padding:0;display:grid;place-items:center;font-size:19px;line-height:1;background:#242a2c;border:1px solid var(--line);border-radius:5px}
       .mb-help-pop{position:fixed;z-index:100000;max-width:260px;padding:8px 10px;background:#252b2f;border:1px solid rgba(255,255,255,.13);border-radius:7px;color:#d3d8da;font:11px/1.45 "Segoe UI",system-ui,sans-serif;box-shadow:0 6px 20px #0008;pointer-events:none}
       .mb-prompt{max-height:460px;overflow:auto;padding-right:3px}.mb-palette-tools{display:flex;align-items:center;gap:6px}.mb-palette-tools button{background:#1d2325;color:#cbd4d7;border:1px solid var(--line);border-radius:6px;padding:5px 8px;cursor:pointer;font:inherit}.mb-palette-list{display:flex;flex-wrap:wrap;gap:4px}.mb-color-chip{display:inline-flex;align-items:center;gap:3px}.mb-color-chip input[type=color]{padding:2px;width:22px;height:20px;cursor:pointer}.mb-color-chip button{border:0;background:transparent;color:#b5bec1;cursor:pointer;padding:0 3px}.mb-elements{display:flex;flex-direction:column;gap:4px;max-height:120px;overflow:auto}.mb-element{border:1px solid var(--line);background:#1d2325;color:#cbd4d7;border-radius:5px;padding:5px 7px;text-align:left;cursor:pointer;font:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mb-element.selected{border-color:var(--accent);color:#fff}
-      .mb-color-popover{position:fixed;z-index:100001;width:210px;padding:12px;background:#171d1f;border:1px solid rgba(255,255,255,.18);border-radius:8px;box-shadow:0 8px 28px #000a;color:#d4dadd;font:12px/1.4 "Segoe UI",system-ui,sans-serif;display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}.mb-color-popover label{grid-column:1/-1;margin:0;color:#b5bec1;padding-right:24px}.mb-color-popover input[type=color]{width:100%;height:34px;padding:2px;background:#202629;border:1px solid var(--line);border-radius:5px}.mb-color-popover button{background:#252c2e;color:#d1d7d9;border:1px solid var(--line);border-radius:5px;padding:5px 8px;cursor:pointer;font:inherit}.mb-color-popover .mb-pop-close{position:absolute;right:5px;top:5px;width:20px;height:20px;padding:0;font-size:17px;line-height:1}.mb-recent-colors{grid-column:1/-1;display:grid;grid-template-columns:repeat(10,minmax(0,1fr));gap:4px}.mb-color-popover .mb-recent-swatch{width:100%;height:18px;min-width:0;padding:0;border-radius:4px;border:1px solid #ffffff45}.mb-elements{display:flex;flex-direction:column;gap:4px;max-height:120px;overflow:auto}.mb-element{border:1px solid var(--line);background:#1d2325;color:#cbd4d7;border-radius:5px;padding:5px 7px;text-align:left;cursor:pointer;font:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mb-element.selected{border-color:var(--accent);color:#fff}
+      .mb-color-popover{position:fixed;z-index:100001;width:250px;padding:12px;background:#171d1f;border:1px solid rgba(255,255,255,.18);border-radius:8px;box-shadow:0 8px 28px #000a;color:#d4dadd;font:12px/1.4 "Segoe UI",system-ui,sans-serif;display:grid;grid-template-columns:1fr;gap:8px;align-items:center}.mb-color-popover label{margin:0;color:#b5bec1;padding-right:24px}.mb-picker-plane{position:relative;width:100%;height:118px;border:1px solid #ffffff35;border-radius:5px;background-image:linear-gradient(to top,#000,transparent),linear-gradient(to right,#fff,transparent);cursor:crosshair;touch-action:none}.mb-picker-handle{position:absolute;width:12px;height:12px;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 4px #000;transform:translate(-50%,-50%);pointer-events:none}.mb-picker-hue-row{display:flex;align-items:center;gap:8px;color:#aeb8bb;font-size:10px}.mb-picker-hue{width:100%;height:13px;margin:0;padding:0!important;appearance:none;border:0!important;border-radius:8px;background:linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)!important}.mb-picker-hue::-webkit-slider-thumb{appearance:none;width:13px;height:13px;border:2px solid #fff;border-radius:50%;background:#272c2e}.mb-picker-value-row{display:grid;grid-template-columns:24px minmax(0,1fr) auto;gap:7px;align-items:center}.mb-picker-preview{width:24px;height:24px;border:1px solid #ffffff50;border-radius:5px}.mb-color-popover .mb-picker-hex{width:100%;height:30px;padding:5px 7px;background:#202629;border:1px solid var(--line);border-radius:5px;color:#e2e8e9;font:11px monospace}.mb-color-popover button{background:#252c2e;color:#d1d7d9;border:1px solid var(--line);border-radius:5px;padding:5px 8px;cursor:pointer;font:inherit}.mb-color-popover .mb-pop-close{position:absolute;right:5px;top:5px;width:20px;height:20px;padding:0;font-size:17px;line-height:1}.mb-recent-colors{display:grid;grid-template-columns:repeat(10,minmax(0,1fr));gap:4px}.mb-color-popover .mb-recent-swatch{width:100%;height:18px;min-width:0;padding:0;border-radius:4px;border:1px solid #ffffff45}.mb-color-popover .mb-recent-swatch.is-empty{background:#242a2c;opacity:.4;cursor:default}.mb-elements{display:flex;flex-direction:column;gap:4px;max-height:120px;overflow:auto}.mb-element{border:1px solid var(--line);background:#1d2325;color:#cbd4d7;border-radius:5px;padding:5px 7px;text-align:left;cursor:pointer;font:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mb-element.selected{border-color:var(--accent);color:#fff}
       @media(max-width:570px){.mb-main{grid-template-columns:minmax(0,1fr)}.mb-canvas-wrap{min-height:230px}.mb-prompt{min-height:210px}.mb-summary{min-height:90px}}
       /* Keep the editor inside the resizable node in both Legacy and Node 2.0. */
       .moss-board{height:100%;min-height:0;overflow:hidden}
       .mb-head,.mb-size-row{flex:0 0 auto}
-      .mb-main{grid-template-columns:minmax(0,1.65fr) minmax(0,1fr);flex:1 1 0;min-height:0;align-items:stretch;overflow:hidden}
-      .mb-canvas-wrap{height:100%;min-height:0;aspect-ratio:auto;align-self:stretch}
-      .mb-canvas{width:auto;height:auto;max-width:100%;max-height:100%;aspect-ratio:1/1;object-fit:contain}
-      .mb-prompt{height:100%;max-height:none;min-height:0;overflow:auto;overscroll-behavior:contain}
-      .mb-summary{flex:1 1 70px;min-height:54px}
+      .mb-main{grid-template-columns:minmax(0,1.65fr) minmax(0,1fr);grid-template-rows:minmax(0,1fr);flex:1 1 0;min-height:0;align-items:stretch;overflow:hidden}
+      .mb-canvas-wrap{display:block;height:100%;min-height:0;aspect-ratio:auto;align-self:stretch}
+      .mb-canvas{width:100%;height:100%;max-width:none;max-height:none;aspect-ratio:auto;object-fit:fill}
+      .mb-prompt{height:100%;max-height:none;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;align-self:stretch;scrollbar-gutter:stable}
+      .mb-summary{flex:0 0 250px;min-height:90px}
       .mb-meta{min-height:48px}
       .mb-preview-note{margin-top:4px}
       .mb-advanced{flex:0 0 auto;margin-top:4px}
+      .mb-elements{flex:0 0 auto;min-height:0;max-height:130px;overflow-y:auto;overflow-x:hidden}
+      .mb-element{flex:0 0 30px;height:30px;min-height:30px;line-height:18px;white-space:nowrap}
       @media(max-width:570px){.mb-main{grid-template-columns:minmax(0,1.35fr) minmax(0,1fr)}.mb-canvas-wrap{min-height:0}.mb-prompt{min-height:0}.mb-summary{min-height:54px}}
     `;
     root.append(css);
     let domWidget = null;
     const getBoardSize = () => {
       const nodeWidth = Number(node.size?.[0]) || 580;
+      const nodeHeight = Number(node.size?.[1]) || 580;
+      const widgetY = Number(domWidget?.y);
+      const remainingNodeHeight = widgetY > 0 ? nodeHeight - widgetY : nodeHeight;
       const allocatedHeight = Number(domWidget?.computedHeight);
       const parentHeight = Number(root.parentElement?.getBoundingClientRect?.().height);
       const elementHeight = Number(root.getBoundingClientRect?.().height);
-      const availableHeight = allocatedHeight > 0 ? allocatedHeight : parentHeight > 0 ? parentHeight : elementHeight > 0 ? elementHeight : 180;
-      return [Math.max(220, nodeWidth - 18), Math.max(0, availableHeight - 2)];
+      const measuredHeight = allocatedHeight > 0 ? allocatedHeight : parentHeight > 0 ? parentHeight : elementHeight > 0 ? elementHeight : remainingNodeHeight;
+      return [Math.max(220, nodeWidth - 18), Math.max(0, Math.min(measuredHeight, remainingNodeHeight) - 20)];
     };
     let resizeFrame = 0;
     const syncBoardSize = () => {
@@ -303,6 +346,19 @@ app.registerExtension({
       resizeFrame = requestAnimationFrame(() => {
         resizeFrame = 0;
         syncBoardSize();
+        const board = root.querySelector(".mb-canvas");
+        const rect = board?.getBoundingClientRect();
+        if (rect?.width > 0 && rect?.height > 0) {
+          try {
+            const saved = JSON.parse(getValue(node, "editor_state", "{}") || "{}");
+            saved.coordinateSpace = "workspace";
+            saved.workspaceAspect = rect.width / rect.height;
+            const value = JSON.stringify(saved);
+            setValue(node, "editor_state", value);
+            const advanced = root.querySelector(".mb-state");
+            if (advanced) advanced.value = value;
+          } catch {}
+        }
       });
     };
     domWidget = node.addDOMWidget(WIDGET, "MOSS_LAYOUT_EDITOR", root, {
@@ -369,6 +425,9 @@ app.registerExtension({
       setValue(node, "summary_meta", meta.value);
       state.summaryPalette = summaryPalette;
       state.recentColors = recentColors.slice(0, 10);
+      state.coordinateSpace = "workspace";
+      const boardRect = canvas.getBoundingClientRect();
+      if (boardRect.width > 0 && boardRect.height > 0) state.workspaceAspect = boardRect.width / boardRect.height;
       if (canvasType.value) state.summaryCanvas = canvasType.value;
       else delete state.summaryCanvas;
       state.backgroundOpacity = backgroundOpacity;
@@ -381,29 +440,11 @@ app.registerExtension({
     }
     function syncSizeFields(updateWidgets = true) {
       const [w, h] = calculatedSize();
-      rebaseBoxesForPixelSize(w, h);
       wInput.value = w; hInput.value = h;
       if (updateWidgets) syncWidgets();
       draw();
     }
 
-    let boxPixelSpace = null;
-    function rebaseBoxesForPixelSize(width, height) {
-      const nextWidth = Math.max(1, roundDimension(width)), nextHeight = Math.max(1, roundDimension(height));
-      const oldWidth = Math.max(1, boxPixelSpace?.width || nextWidth), oldHeight = Math.max(1, boxPixelSpace?.height || nextHeight);
-      if (oldWidth !== nextWidth || oldHeight !== nextHeight) {
-        state.items.forEach((item) => {
-          const b = item.bbox || [0, 0, 1, 1];
-          let x1 = b[0] * oldWidth, y1 = b[1] * oldHeight;
-          let x2 = b[2] * oldWidth, y2 = b[3] * oldHeight;
-          let bw = Math.min(Math.max(1, x2 - x1), nextWidth), bh = Math.min(Math.max(1, y2 - y1), nextHeight);
-          x1 = Math.max(0, Math.min(nextWidth - bw, x1)); y1 = Math.max(0, Math.min(nextHeight - bh, y1));
-          x2 = x1 + bw; y2 = y1 + bh;
-          item.bbox = [x1 / nextWidth, y1 / nextHeight, x2 / nextWidth, y2 / nextHeight];
-        });
-      }
-      boxPixelSpace = { width: nextWidth, height: nextHeight };
-    }
     function rememberColor(color) {
       if (!/^#[0-9a-f]{6}$/i.test(color)) return;
       recentColors = [color.toLowerCase(), ...recentColors.filter((entry) => entry.toLowerCase() !== color.toLowerCase())].slice(0, 10);
@@ -421,18 +462,35 @@ app.registerExtension({
 
     function fieldRect() {
       const r = ratioSelect.value === "Custom" ? (Number(wInput.value) || 1024) / Math.max(1, Number(hInput.value) || 1024) : ratioValue();
-      const w = r >= CW / CH ? CW : CH * r, h = w / r;
+      const bounds = canvas.getBoundingClientRect();
+      const workspaceAspect = bounds.width > 0 && bounds.height > 0 ? bounds.width / bounds.height : 1;
+      const coordinateRatio = r * CW / CH / workspaceAspect;
+      const w = coordinateRatio >= CW / CH ? CW : CH * coordinateRatio, h = w / coordinateRatio;
       return { x: (CW - w) / 2, y: (CH - h) / 2, w, h };
     }
+    function migrateItemsToWorkspace() {
+      if (state.coordinateSpace === "workspace") return;
+      const aspect = ratioSelect.value === "Custom" ? (Number(wInput.value) || 1024) / Math.max(1, Number(hInput.value) || 1024) : ratioValue();
+      const width = aspect >= 1 ? 1 : aspect, height = aspect >= 1 ? 1 / aspect : 1;
+      const left = (1 - width) / 2, top = (1 - height) / 2;
+      state.items = state.items.map((item) => {
+        const box = item.bbox || [0, 0, 1, 1];
+        return { ...item, bbox: [left + box[0] * width, top + box[1] * height, left + box[2] * width, top + box[3] * height] };
+      });
+      state.coordinateSpace = "workspace";
+    }
+    function generationBoxToWorkspace(box) {
+      const frame = fieldRect();
+      return [(frame.x + box[0] * frame.w) / CW, (frame.y + box[1] * frame.h) / CH,
+              (frame.x + box[2] * frame.w) / CW, (frame.y + box[3] * frame.h) / CH];
+    }
     function boxPx(box) {
-      const r = fieldRect();
-      return [r.x + box[0] * r.w, r.y + box[1] * r.h, r.x + box[2] * r.w, r.y + box[3] * r.h];
+      return [box[0] * CW, box[1] * CH, box[2] * CW, box[3] * CH];
     }
     function canvasPoint(event) {
       const cr = canvas.getBoundingClientRect();
       const x = (event.clientX - cr.left) * CW / cr.width, y = (event.clientY - cr.top) * CH / cr.height;
-      const r = fieldRect();
-      return { px: x, py: y, x: Math.max(0, Math.min(1, (x - r.x) / r.w)), y: Math.max(0, Math.min(1, (y - r.y) / r.h)), inside: x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h };
+      return { px: x, py: y, x: Math.max(0, Math.min(1, x / CW)), y: Math.max(0, Math.min(1, y / CH)), inside: x >= 0 && x <= CW && y >= 0 && y <= CH };
     }
     function paintPreview() {
       if (!latestPreview?.complete || !latestPreview.naturalWidth) return;
@@ -510,9 +568,9 @@ app.registerExtension({
         }
       });
       if (gesture?.mode === "create" && gesture.current) {
-        const frame = fieldRect(), a = gesture.start, b = gesture.current;
-        const x = frame.x + Math.min(a.x,b.x)*frame.w, y = frame.y + Math.min(a.y,b.y)*frame.h;
-        const w = Math.abs(a.x-b.x)*frame.w, h = Math.abs(a.y-b.y)*frame.h;
+        const a = gesture.start, b = gesture.current;
+        const x = Math.min(a.x,b.x)*CW, y = Math.min(a.y,b.y)*CH;
+        const w = Math.abs(a.x-b.x)*CW, h = Math.abs(a.y-b.y)*CH;
         ctx.fillStyle = "rgba(158,175,180,.12)"; ctx.fillRect(x,y,w,h);
         ctx.strokeStyle = "#9eafb4"; ctx.lineWidth = 1.8; ctx.setLineDash([5,4]); ctx.strokeRect(x,y,w,h); ctx.setLineDash([]);
       }
@@ -559,9 +617,8 @@ app.registerExtension({
       return "move";
     }
     function setBoxFromPixels(item, x1, y1, x2, y2) {
-      const r = fieldRect();
-      item.bbox = [Math.max(0, Math.min(1, (x1-r.x)/r.w)), Math.max(0, Math.min(1, (y1-r.y)/r.h)),
-                   Math.max(0, Math.min(1, (x2-r.x)/r.w)), Math.max(0, Math.min(1, (y2-r.y)/r.h))];
+      item.bbox = [Math.max(0, Math.min(1, x1/CW)), Math.max(0, Math.min(1, y1/CH)),
+                   Math.max(0, Math.min(1, x2/CW)), Math.max(0, Math.min(1, y2/CH))];
     }
     function createBox(start, end) {
       const item = { label: "object", caption: "", bbox: [Math.min(start.x,end.x),Math.min(start.y,end.y),Math.max(start.x,end.x),Math.max(start.y,end.y)] };
@@ -679,7 +736,7 @@ app.registerExtension({
       const p = canvasPoint(event);
       if (!gesture) { const hit=boxAt(p.px,p.py,false);canvas.style.cursor=hit>=0?(edgeAt(state.items[hit].bbox,p.px,p.py)==="move"?"move":"nwse-resize"):"crosshair";return; }
       if (gesture.mode === "create") { gesture.current = p; draw(); return; }
-      const box = [...gesture.original], dx = (p.px - gesture.start.px) / fieldRect().w, dy = (p.py - gesture.start.py) / fieldRect().h;
+      const box = [...gesture.original], dx = (p.px - gesture.start.px) / CW, dy = (p.py - gesture.start.py) / CH;
       if (gesture.mode === "move") { box[0]+=dx;box[2]+=dx;box[1]+=dy;box[3]+=dy; }
       else { if (gesture.mode.includes("l")) box[0]+=dx;if (gesture.mode.includes("r")) box[2]+=dx;if (gesture.mode.includes("t")) box[1]+=dy;if (gesture.mode.includes("b")) box[3]+=dy; }
       const nx=Math.max(0,Math.min(1,box[0])),ny=Math.max(0,Math.min(1,box[1]));
@@ -719,7 +776,6 @@ app.registerExtension({
     wInput.value = numberFrom(node,"width",1024);hInput.value = numberFrom(node,"height",1024);mpInput.value=numberFrom(node,"megapixels",1);
     if(mpSelect.value!=="Custom")mpInput.value=parseFloat(mpSelect.value);
     wInput.step = hInput.step = "16";
-    boxPixelSpace = { width: roundDimension(wInput.value), height: roundDimension(hInput.value) };
     opacitySlider.value = String(backgroundOpacity);
     function updateBackgroundControls() {
       opacityLabel.textContent = `${backgroundOpacity}%`;
@@ -734,7 +790,7 @@ app.registerExtension({
     ratioSelect.addEventListener("change",()=>syncSizeFields());
     mpSelect.addEventListener("change",()=>{if(mpSelect.value!=="Custom")mpInput.value=parseFloat(mpSelect.value);syncSizeFields();});
     mpInput.addEventListener("input",()=>{mpSelect.value="Custom";syncSizeFields();});
-    for (const input of [wInput,hInput]) input.addEventListener("input",()=>{ratioSelect.value="Custom";mpSelect.value="Custom";mpInput.value=Math.max(.25,((Number(wInput.value)||1024)*(Number(hInput.value)||1024))/1e6).toFixed(2);rebaseBoxesForPixelSize(wInput.value,hInput.value);syncWidgets();draw();});
+    for (const input of [wInput,hInput]) input.addEventListener("input",()=>{ratioSelect.value="Custom";mpSelect.value="Custom";mpInput.value=Math.max(.25,((Number(wInput.value)||1024)*(Number(hInput.value)||1024))/1e6).toFixed(2);syncWidgets();draw();});
     opacitySlider.addEventListener("input",()=>{backgroundOpacity=Math.max(0,Math.min(100,Number(opacitySlider.value)||0));updateBackgroundControls();syncWidgets();draw();});
     eyeButton.addEventListener("click",()=>{backgroundVisible=!backgroundVisible;updateBackgroundControls();syncWidgets();draw();});
     $(".mb-clear-all").addEventListener("click",()=>{
@@ -742,6 +798,7 @@ app.registerExtension({
       state = {
         items: [],
         summaryPalette: [],
+        coordinateSpace: "workspace",
         backgroundOpacity,
         backgroundVisible,
         lastLayoutInputHash: state.lastLayoutInputHash || "",
@@ -750,7 +807,6 @@ app.registerExtension({
       };
       selected = -1; sampleMode = null; summary.value = ""; meta.value = ""; canvasType.value = ""; summaryPalette = []; recentColors = [];
       ratioSelect.value = "1:1"; mpSelect.value = "1 MP"; mpInput.value = "1"; wInput.value = "1024"; hInput.value = "1024";
-      boxPixelSpace = { width: 1024, height: 1024 };
       syncWidgets(); draw();
     });
     function swapOrientationPreservingBoxes() {
@@ -759,7 +815,6 @@ app.registerExtension({
       wInput.value = oldHeight; hInput.value = oldWidth;
       if (ratioOptions.includes(swapped)) ratioSelect.value = swapped;
       else { ratioSelect.value = "Custom"; mpSelect.value = "Custom"; mpInput.value = (oldWidth * oldHeight / 1e6).toFixed(2); }
-      rebaseBoxesForPixelSize(wInput.value, hInput.value);
       syncWidgets();draw();
     }
     $(".mb-swap").addEventListener("click",swapOrientationPreservingBoxes);
@@ -873,7 +928,7 @@ app.registerExtension({
           const output = event.detail?.output || {};
           const rawWidth = output.width ?? output.ui?.width, rawHeight = output.height ?? output.ui?.height;
           const outWidth = Number(Array.isArray(rawWidth)?rawWidth[0]:rawWidth), outHeight = Number(Array.isArray(rawHeight)?rawHeight[0]:rawHeight);
-          if (outWidth > 0 && outHeight > 0) { ratioSelect.value="Custom"; rebaseBoxesForPixelSize(outWidth,outHeight); wInput.value=outWidth; hInput.value=outHeight; syncWidgets(); draw(); }
+          if (outWidth > 0 && outHeight > 0) { ratioSelect.value="Custom"; wInput.value=outWidth; hInput.value=outHeight; syncWidgets(); draw(); }
         }
         return;
       }
@@ -920,7 +975,6 @@ app.registerExtension({
         setValue(node, "editor_state", savedState.value);
       }
       ratioSelect.value = echo?.aspect_ratio || (linkedInput(node, "background_resize") ? "Custom" : ratioSelect.value);
-      rebaseBoxesForPixelSize(outWidth, outHeight);
       wInput.value = outWidth;
       hInput.value = outHeight;
       if (echo?.source === "wired_dimensions") {
@@ -940,7 +994,8 @@ app.registerExtension({
       const importPayload = output?.moss_layout_import ?? output?.ui?.moss_layout_import;
       const imported = Array.isArray(importPayload) ? importPayload.at(-1) : importPayload;
       if (!imported || !Array.isArray(imported.items)) return;
-      state.items = imported.items;
+      state.items = imported.items.map((item) => ({ ...item, bbox: generationBoxToWorkspace(item.bbox || [0,0,1,1]) }));
+      state.coordinateSpace = "workspace";
       if (imported.input_hash) state.lastLayoutInputHash = imported.input_hash;
       if (imported.clear_suppression) {
         delete state.suppressLayoutInput;
@@ -986,12 +1041,12 @@ app.registerExtension({
       hInput.value = numberFrom(node, "height", 1024);
       mpInput.value = numberFrom(node, "megapixels", 1);
       if (mpSelect.value !== "Custom") mpInput.value = parseFloat(mpSelect.value);
-      boxPixelSpace = { width: roundDimension(wInput.value), height: roundDimension(hInput.value) };
       summary.value = getValue(node, "summary", "");
       meta.value = getValue(node, "summary_meta", "");
       canvasType.value = ["single", "multi_panel", "collage"].includes(state.summaryCanvas) ? state.summaryCanvas : "";
       canvasType.value = ["single", "multi_panel", "collage"].includes(state.summaryCanvas) ? state.summaryCanvas : "";
       opacitySlider.value = String(backgroundOpacity);
+      migrateItemsToWorkspace();
       savedState.value = JSON.stringify(state);
       selected = -1;
       updateBackgroundControls();
@@ -1047,7 +1102,7 @@ app.registerExtension({
       info.addEventListener("mouseenter",show);info.addEventListener("focus",show);info.addEventListener("mouseleave",()=>{showHelp?.remove();showHelp=null;});info.addEventListener("blur",()=>{showHelp?.remove();showHelp=null;});
     }
     if(ratioSelect.value!=="Custom") { const [initialWidth,initialHeight]=calculatedSize();wInput.value=initialWidth;hInput.value=initialHeight; }
-    boxPixelSpace = { width: roundDimension(wInput.value), height: roundDimension(hInput.value) };
+    migrateItemsToWorkspace();
     savedState.value=JSON.stringify(state);
     syncWidgets();draw();syncConnectedBackground();
   },
