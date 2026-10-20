@@ -309,7 +309,7 @@ app.registerExtension({
       .mb-head,.mb-size-row{flex:0 0 auto}
       .mb-main{grid-template-columns:minmax(0,1.65fr) minmax(0,1fr);grid-template-rows:minmax(0,1fr);flex:1 1 0;min-height:0;align-items:stretch;overflow:hidden}
       .mb-canvas-wrap{display:block;height:100%;min-height:0;aspect-ratio:auto;align-self:stretch}
-      .mb-canvas{width:100%;height:100%;max-width:none;max-height:none;aspect-ratio:auto;object-fit:fill}
+      .mb-canvas{position:absolute;inset:0;width:100%;height:100%;max-width:none;max-height:none;aspect-ratio:auto;object-fit:fill}
       .mb-prompt{height:100%;max-height:none;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;align-self:stretch;scrollbar-gutter:stable}
       .mb-summary{flex:0 0 250px;min-height:90px}
       .mb-meta{min-height:48px}
@@ -463,10 +463,19 @@ app.registerExtension({
     function fieldRect() {
       const r = ratioSelect.value === "Custom" ? (Number(wInput.value) || 1024) / Math.max(1, Number(hInput.value) || 1024) : ratioValue();
       const bounds = canvas.getBoundingClientRect();
-      const workspaceAspect = bounds.width > 0 && bounds.height > 0 ? bounds.width / bounds.height : 1;
-      const coordinateRatio = r * CW / CH / workspaceAspect;
-      const w = coordinateRatio >= CW / CH ? CW : CH * coordinateRatio, h = w / coordinateRatio;
-      return { x: (CW - w) / 2, y: (CH - h) / 2, w, h };
+      const workspaceWidth = bounds.width > 0 ? bounds.width : CW;
+      const workspaceHeight = bounds.height > 0 ? bounds.height : CH;
+      const workspaceAspect = workspaceWidth / workspaceHeight;
+      const frameWidth = workspaceAspect >= r ? workspaceHeight * r : workspaceWidth;
+      const frameHeight = frameWidth / r;
+      const x = (workspaceWidth - frameWidth) / 2;
+      const y = (workspaceHeight - frameHeight) / 2;
+      return {
+        x: x * CW / workspaceWidth,
+        y: y * CH / workspaceHeight,
+        w: frameWidth * CW / workspaceWidth,
+        h: frameHeight * CH / workspaceHeight,
+      };
     }
     function migrateItemsToWorkspace() {
       if (state.coordinateSpace === "workspace") return;
