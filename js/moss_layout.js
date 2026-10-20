@@ -6,7 +6,6 @@ import { app } from "/scripts/app.js";
 
 const WIDGET = "moss_layout_editor";
 const CW = 1000, CH = 1000;
-const COLOR = { object: "#b0bbc0", character: "#89989e", text: "#c6cdd0" };
 const TYPE_NAME = { object: "Object", character: "Character", text: "Text" };
 let activeLayoutDelete = null;
 const keyGuardedCanvases = new WeakMap();
@@ -93,14 +92,23 @@ function numberFrom(node, name, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 
-function openColorPopover(anchor, onAdd) {
+function openColorPopover(anchor, onAdd, recentColors = []) {
   activeColorPopoverClose?.();
   const pop = document.createElement("div");
   pop.className = "mb-color-popover";
-  pop.innerHTML = `<button class="mb-pop-close" type="button" title="Close" aria-label="Close">×</button><label>Choose color</label><input class="mb-pop-color" type="color" value="#b4c0c5"><button class="mb-pop-add" type="button">＋ Add</button>`;
+  pop.innerHTML = `<button class="mb-pop-close" type="button" title="Close" aria-label="Close">×</button><label>Choose a color</label><input class="mb-pop-color" type="color" value="#b4c0c5"><button class="mb-pop-add" type="button">＋ Add</button><div class="mb-recent-colors" aria-label="Recently used colors"></div>`;
+  const recentHost = pop.querySelector(".mb-recent-colors");
+  recentColors.slice(0, 10).forEach((color) => {
+    if (!/^#[0-9a-f]{6}$/i.test(color)) return;
+    const swatch = document.createElement("button");
+    swatch.type = "button"; swatch.className = "mb-recent-swatch"; swatch.style.backgroundColor = color;
+    swatch.title = `Use ${color}`; swatch.setAttribute("aria-label", `Use color ${color}`);
+    swatch.addEventListener("click", () => { onAdd(color); close(); });
+    recentHost.append(swatch);
+  });
   document.body.append(pop);
   const rect = anchor.getBoundingClientRect();
-  const popWidth = 190, popHeight = 112;
+  const popWidth = 210, popHeight = 154;
   pop.style.left = `${Math.max(8, Math.min(innerWidth - popWidth - 8, rect.left))}px`;
   pop.style.top = `${rect.bottom + popHeight + 8 < innerHeight ? rect.bottom + 6 : Math.max(8, rect.top - popHeight - 6)}px`;
   const close = () => { document.removeEventListener("pointerdown", outside, true); pop.remove(); if (activeColorPopoverClose === close) activeColorPopoverClose = null; };
@@ -110,6 +118,8 @@ function openColorPopover(anchor, onAdd) {
   pop.addEventListener("pointerdown", (event) => event.stopPropagation());
   pop.querySelector(".mb-pop-close").onclick = close;
   pop.querySelector(".mb-pop-add").onclick = () => { onAdd(pop.querySelector(".mb-pop-color").value); close(); };
+  const colorInput = pop.querySelector(".mb-pop-color");
+  try { if (colorInput.showPicker) colorInput.showPicker(); else colorInput.click(); } catch { colorInput.click(); }
 }
 
 let activeColorPopoverClose = null;
@@ -218,7 +228,7 @@ app.registerExtension({
     root.title = "Compose a MOSS-Image layout prompt. Draw regions, then double-click a box to edit it.";
     root.innerHTML = `
       <div class="mb-head">
-        <div class="mb-control"><label title="Choose the canvas proportions. Box positions stay relative to this frame.">Aspect ratio</label><select class="mb-ratio"></select></div>
+        <div class="mb-control"><label title="Choose the canvas proportions. Box geometry is kept in pixel space when the canvas changes size.">Aspect ratio</label><select class="mb-ratio"></select></div>
         <button class="mb-swap" title="Swap landscape and portrait orientation" aria-label="Swap orientation">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h14m0 0-3-3m3 3-3 3M20 17H6m0 0 3-3m-3 3 3 3"/><path d="m7 4 10 16"/></svg>
         </button>
@@ -253,8 +263,8 @@ app.registerExtension({
       .mb-main{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(170px,1fr);gap:9px;min-height:300px;align-items:start}.mb-canvas-wrap{position:relative;min-width:0;width:100%;aspect-ratio:1/1;align-self:start;min-height:0;border:1px solid var(--line);border-radius:7px;background:#0e1214;overflow:hidden;display:grid;place-items:center}.mb-canvas{display:block;width:100%;height:100%;aspect-ratio:1/1;max-height:none;object-fit:fill;touch-action:none;cursor:crosshair}.mb-empty{position:absolute;pointer-events:none;opacity:.35;color:#b9c2c4;font-size:11px}.mb-prompt{display:flex;flex-direction:column;gap:5px;min-width:0}.mb-prompt textarea{width:100%;resize:vertical}.mb-summary{flex:1;min-height:130px}.mb-meta{min-height:60px}.mb-info{display:inline-grid;place-items:center;border:1px solid rgba(255,255,255,.25);border-radius:50%;width:14px;height:14px;font:italic 11px Georgia;color:#a5afb2;cursor:help}.mb-preview-note{font-size:10px;color:#899498;margin-top:auto}.mb-advanced{display:flex;flex-direction:column;gap:5px}.mb-state-toggle{align-self:flex-start;background:none;border:0;color:#8f999c;font:10px inherit;cursor:pointer;padding:2px}.mb-state{display:none;width:100%;height:70px;resize:vertical;font:10px monospace!important}.mb-state.open{display:block}
       .mb-modal-shade{position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.52);display:grid;place-items:center}.mb-modal{position:relative;width:min(420px,calc(100vw - 28px));max-height:calc(100vh - 28px);overflow:auto;background:#14191b;border:1px solid rgba(255,255,255,.12);border-radius:10px;box-shadow:0 14px 44px #0009;padding:14px;color:#d3d8da;font:12px/1.45 "Segoe UI",system-ui,sans-serif}.mb-modal h3{margin:0 30px 9px 0;font-size:14px;font-weight:600}.mb-modal label{display:block;color:#b5bec1;margin:10px 0 4px}.mb-modal select,.mb-modal input,.mb-modal textarea{width:100%;background:#1b2022;color:#d3d8da;border:1px solid rgba(255,255,255,.12);border-radius:6px;padding:7px;font:inherit}.mb-modal textarea{min-height:70px;resize:vertical}.mb-modal .mb-exact{min-height:56px}.mb-modal .mb-modal-help{color:#8e999c;font-size:10px;margin-top:4px}.mb-modal .mb-modal-buttons{display:flex;justify-content:space-between;gap:7px;margin-top:13px}.mb-modal button{background:#202629;color:#cbd4d7;border:1px solid var(--line);border-radius:6px;padding:6px 10px;cursor:pointer}.mb-modal button.primary{background:linear-gradient(#b2c0c4,#7e9096);color:#111719;border:0;font-weight:600}.mb-modal button.danger{color:#df9696}.mb-modal .mb-modal-close{position:absolute;right:8px;top:7px;width:23px;height:23px;padding:0;display:grid;place-items:center;font-size:19px;line-height:1;background:#242a2c;border:1px solid var(--line);border-radius:5px}
       .mb-help-pop{position:fixed;z-index:100000;max-width:260px;padding:8px 10px;background:#252b2f;border:1px solid rgba(255,255,255,.13);border-radius:7px;color:#d3d8da;font:11px/1.45 "Segoe UI",system-ui,sans-serif;box-shadow:0 6px 20px #0008;pointer-events:none}
-      .mb-prompt{max-height:460px;overflow:auto;padding-right:3px}.mb-palette-tools{display:flex;align-items:center;gap:6px}.mb-palette-tools button{background:#1d2325;color:#cbd4d7;border:1px solid var(--line);border-radius:6px;padding:5px 8px;cursor:pointer;font:inherit}.mb-palette-list{display:flex;flex-wrap:wrap;gap:4px}.mb-color-chip{display:inline-flex;align-items:center;gap:3px}.mb-color-chip input[type=color]{padding:2px;width:30px;height:27px;cursor:pointer}.mb-color-chip button{border:0;background:transparent;color:#b5bec1;cursor:pointer;padding:0 3px}.mb-elements{display:flex;flex-direction:column;gap:4px;max-height:120px;overflow:auto}.mb-element{border:1px solid var(--line);background:#1d2325;color:#cbd4d7;border-radius:5px;padding:5px 7px;text-align:left;cursor:pointer;font:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mb-element.selected{border-color:var(--accent);color:#fff}
-      .mb-color-popover{position:fixed;z-index:100001;width:190px;padding:12px;background:#171d1f;border:1px solid rgba(255,255,255,.18);border-radius:8px;box-shadow:0 8px 28px #000a;color:#d4dadd;font:12px/1.4 "Segoe UI",system-ui,sans-serif;display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}.mb-color-popover label{grid-column:1/-1;margin:0;color:#b5bec1}.mb-color-popover input[type=color]{width:100%;height:30px;padding:2px;background:#202629;border:1px solid var(--line);border-radius:5px}.mb-color-popover button{background:#252c2e;color:#d1d7d9;border:1px solid var(--line);border-radius:5px;padding:5px 8px;cursor:pointer;font:inherit}.mb-color-popover .mb-pop-close{position:absolute;right:5px;top:5px;width:20px;height:20px;padding:0;font-size:17px;line-height:1}.mb-color-popover label{padding-right:24px}.mb-elements{display:flex;flex-direction:column;gap:4px;max-height:120px;overflow:auto}.mb-element{border:1px solid var(--line);background:#1d2325;color:#cbd4d7;border-radius:5px;padding:5px 7px;text-align:left;cursor:pointer;font:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mb-element.selected{border-color:var(--accent);color:#fff}
+      .mb-prompt{max-height:460px;overflow:auto;padding-right:3px}.mb-palette-tools{display:flex;align-items:center;gap:6px}.mb-palette-tools button{background:#1d2325;color:#cbd4d7;border:1px solid var(--line);border-radius:6px;padding:5px 8px;cursor:pointer;font:inherit}.mb-palette-list{display:flex;flex-wrap:wrap;gap:4px}.mb-color-chip{display:inline-flex;align-items:center;gap:3px}.mb-color-chip input[type=color]{padding:2px;width:22px;height:20px;cursor:pointer}.mb-color-chip button{border:0;background:transparent;color:#b5bec1;cursor:pointer;padding:0 3px}.mb-elements{display:flex;flex-direction:column;gap:4px;max-height:120px;overflow:auto}.mb-element{border:1px solid var(--line);background:#1d2325;color:#cbd4d7;border-radius:5px;padding:5px 7px;text-align:left;cursor:pointer;font:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mb-element.selected{border-color:var(--accent);color:#fff}
+      .mb-color-popover{position:fixed;z-index:100001;width:210px;padding:12px;background:#171d1f;border:1px solid rgba(255,255,255,.18);border-radius:8px;box-shadow:0 8px 28px #000a;color:#d4dadd;font:12px/1.4 "Segoe UI",system-ui,sans-serif;display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}.mb-color-popover label{grid-column:1/-1;margin:0;color:#b5bec1;padding-right:24px}.mb-color-popover input[type=color]{width:100%;height:34px;padding:2px;background:#202629;border:1px solid var(--line);border-radius:5px}.mb-color-popover button{background:#252c2e;color:#d1d7d9;border:1px solid var(--line);border-radius:5px;padding:5px 8px;cursor:pointer;font:inherit}.mb-color-popover .mb-pop-close{position:absolute;right:5px;top:5px;width:20px;height:20px;padding:0;font-size:17px;line-height:1}.mb-recent-colors{grid-column:1/-1;display:grid;grid-template-columns:repeat(10,minmax(0,1fr));gap:4px}.mb-color-popover .mb-recent-swatch{width:100%;height:18px;min-width:0;padding:0;border-radius:4px;border:1px solid #ffffff45}.mb-elements{display:flex;flex-direction:column;gap:4px;max-height:120px;overflow:auto}.mb-element{border:1px solid var(--line);background:#1d2325;color:#cbd4d7;border-radius:5px;padding:5px 7px;text-align:left;cursor:pointer;font:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mb-element.selected{border-color:var(--accent);color:#fff}
       @media(max-width:570px){.mb-main{grid-template-columns:minmax(0,1fr)}.mb-canvas-wrap{min-height:230px}.mb-prompt{min-height:210px}.mb-summary{min-height:90px}}
       /* Keep the editor inside the resizable node in both Legacy and Node 2.0. */
       .moss-board{height:100%;min-height:0;overflow:hidden}
@@ -270,10 +280,14 @@ app.registerExtension({
       @media(max-width:570px){.mb-main{grid-template-columns:minmax(0,1.35fr) minmax(0,1fr)}.mb-canvas-wrap{min-height:0}.mb-prompt{min-height:0}.mb-summary{min-height:54px}}
     `;
     root.append(css);
+    let domWidget = null;
     const getBoardSize = () => {
       const nodeWidth = Number(node.size?.[0]) || 580;
-      const nodeHeight = Number(node.size?.[1]) || 580;
-      return [Math.max(220, nodeWidth - 18), Math.max(180, nodeHeight - 38)];
+      const allocatedHeight = Number(domWidget?.computedHeight);
+      const parentHeight = Number(root.parentElement?.getBoundingClientRect?.().height);
+      const elementHeight = Number(root.getBoundingClientRect?.().height);
+      const availableHeight = allocatedHeight > 0 ? allocatedHeight : parentHeight > 0 ? parentHeight : elementHeight > 0 ? elementHeight : 180;
+      return [Math.max(220, nodeWidth - 18), Math.max(0, availableHeight - 2)];
     };
     let resizeFrame = 0;
     const syncBoardSize = () => {
@@ -291,7 +305,7 @@ app.registerExtension({
         syncBoardSize();
       });
     };
-    node.addDOMWidget(WIDGET, "MOSS_LAYOUT_EDITOR", root, {
+    domWidget = node.addDOMWidget(WIDGET, "MOSS_LAYOUT_EDITOR", root, {
       serialize: false,
       hideOnZoom: false,
       getMinHeight: () => 180,
@@ -305,13 +319,17 @@ app.registerExtension({
 
     const $ = (selector) => root.querySelector(selector);
     const canvas = $(".mb-canvas"), ctx = canvas.getContext("2d");
+    canvas.title = "Drag to draw a box. Click to select it. Hold Alt and click to cycle through overlapping boxes. Double-click to edit.";
     const ratioSelect = $(".mb-ratio"), wInput = $(".mb-width"), hInput = $(".mb-height");
     const mpSelect = $(".mb-mp-select"), mpInput = $(".mb-mp"), summary = $(".mb-summary"), meta = $(".mb-meta"), canvasType = $(".mb-canvas-type");
     const opacitySlider = $(".mb-bg-opacity"), opacityLabel = $(".mb-bg-opacity-label"), eyeButton = $(".mb-bg-eye");
     const savedState = $(".mb-state"), stateToggle = $(".mb-state-toggle"), emptyHint = $(".mb-empty");
     let state = readState(node), selected = -1, gesture = null, latestPreview = null, showHelp = null, sampleMode = null, previewRect = null;
+    const boxUiColors = new WeakMap();
+    let altPickCycle = null;
     let backgroundPinned = false, previewSerial = 0, previewBlobUrl = null, lastAutoPreview = null;
     let summaryPalette = Array.isArray(state.summaryPalette) ? state.summaryPalette : [];
+    let recentColors = Array.isArray(state.recentColors) ? state.recentColors.filter((color) => /^#[0-9a-f]{6}$/i.test(color)).slice(0, 10) : [];
     const clampPercent = (value, fallback = 100) => Number.isFinite(Number(value)) ? Math.max(0, Math.min(100, Number(value))) : fallback;
     let backgroundOpacity = clampPercent(state.backgroundOpacity);
     let backgroundVisible = state.backgroundVisible !== false;
@@ -350,6 +368,7 @@ app.registerExtension({
       setValue(node, "summary", summary.value);
       setValue(node, "summary_meta", meta.value);
       state.summaryPalette = summaryPalette;
+      state.recentColors = recentColors.slice(0, 10);
       if (canvasType.value) state.summaryCanvas = canvasType.value;
       else delete state.summaryCanvas;
       state.backgroundOpacity = backgroundOpacity;
@@ -362,9 +381,42 @@ app.registerExtension({
     }
     function syncSizeFields(updateWidgets = true) {
       const [w, h] = calculatedSize();
+      rebaseBoxesForPixelSize(w, h);
       wInput.value = w; hInput.value = h;
       if (updateWidgets) syncWidgets();
       draw();
+    }
+
+    let boxPixelSpace = null;
+    function rebaseBoxesForPixelSize(width, height) {
+      const nextWidth = Math.max(1, roundDimension(width)), nextHeight = Math.max(1, roundDimension(height));
+      const oldWidth = Math.max(1, boxPixelSpace?.width || nextWidth), oldHeight = Math.max(1, boxPixelSpace?.height || nextHeight);
+      if (oldWidth !== nextWidth || oldHeight !== nextHeight) {
+        state.items.forEach((item) => {
+          const b = item.bbox || [0, 0, 1, 1];
+          let x1 = b[0] * oldWidth, y1 = b[1] * oldHeight;
+          let x2 = b[2] * oldWidth, y2 = b[3] * oldHeight;
+          let bw = Math.min(Math.max(1, x2 - x1), nextWidth), bh = Math.min(Math.max(1, y2 - y1), nextHeight);
+          x1 = Math.max(0, Math.min(nextWidth - bw, x1)); y1 = Math.max(0, Math.min(nextHeight - bh, y1));
+          x2 = x1 + bw; y2 = y1 + bh;
+          item.bbox = [x1 / nextWidth, y1 / nextHeight, x2 / nextWidth, y2 / nextHeight];
+        });
+      }
+      boxPixelSpace = { width: nextWidth, height: nextHeight };
+    }
+    function rememberColor(color) {
+      if (!/^#[0-9a-f]{6}$/i.test(color)) return;
+      recentColors = [color.toLowerCase(), ...recentColors.filter((entry) => entry.toLowerCase() !== color.toLowerCase())].slice(0, 10);
+      state.recentColors = recentColors;
+    }
+    function visualBoxColor(item) {
+      let color = boxUiColors.get(item);
+      if (!color) {
+        const hue = Math.floor(Math.random() * 360), saturation = 54 + Math.floor(Math.random() * 18), lightness = 56 + Math.floor(Math.random() * 12);
+        color = `hsl(${hue} ${saturation}% ${lightness}%)`;
+        boxUiColors.set(item, color);
+      }
+      return color;
     }
 
     function fieldRect() {
@@ -399,7 +451,7 @@ app.registerExtension({
       ctx.strokeStyle = "rgba(205,216,219,.46)"; ctx.lineWidth = 1.5; ctx.setLineDash([7, 6]); ctx.strokeRect(r.x, r.y, r.w, r.h); ctx.setLineDash([]);
       state.items.forEach((item, index) => {
         const [x1, y1, x2, y2] = boxPx(item.bbox || [0, 0, 1, 1]);
-        const color = COLOR[item.label] || COLOR.object;
+        const color = visualBoxColor(item);
         ctx.fillStyle = color; ctx.globalAlpha = .13; ctx.fillRect(x1, y1, x2 - x1, y2 - y1); ctx.globalAlpha = 1;
         ctx.strokeStyle = color; ctx.lineWidth = index === selected ? 2.6 : 1.7; ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
         const boxWidth = Math.max(0, x2 - x1), boxHeight = Math.max(0, y2 - y1);
@@ -472,15 +524,31 @@ app.registerExtension({
 
     function saveState() { savedState.value = JSON.stringify(state); syncWidgets(); draw(); }
     function renderSidebar(){const list=$(".mb-elements");list.innerHTML="";state.items.forEach((item,i)=>{const b=document.createElement("button");b.type="button";b.className="mb-element"+(i===selected?" selected":"");b.textContent=`${TYPE_NAME[item.label]||"Object"} ${i+1}: ${item.caption||item.text||"(no description)"}`;b.onclick=()=>{selected=i;canvas.focus();draw();};b.ondblclick=()=>openEditor(i,innerWidth/2,innerHeight/2);list.append(b);});const pal=$(".mb-global-palette");pal.innerHTML="";summaryPalette.forEach((color,i)=>{const chip=document.createElement("span");chip.className="mb-color-chip";chip.innerHTML=`<input type="color" value="${/^#[0-9a-f]{6}$/i.test(color)?color:"#b4c0c5"}"><button type="button" title="Remove color">×</button>`;chip.querySelector("input").oninput=e=>{summaryPalette[i]=e.target.value;syncWidgets();};chip.querySelector("button").onclick=()=>{summaryPalette.splice(i,1);syncWidgets();draw();};pal.append(chip);});}
-    function boxAt(x, y, alt) {
+    function hitItemsAt(x, y) {
       const hits = [];
       for (let i = state.items.length - 1; i >= 0; i--) {
         const [x1,y1,x2,y2] = boxPx(state.items[i].bbox);
-        if (x >= x1 && x <= x2 && y >= y1 && y <= y2) hits.push(i);
+        if (x >= x1 && x <= x2 && y >= y1 && y <= y2) hits.push(state.items[i]);
       }
-      if (!hits.length) return -1;
-      if (alt && selected >= 0) { const pos = hits.indexOf(selected); return hits[(pos + 1) % hits.length]; }
-      return hits[0];
+      return hits;
+    }
+    function boxAt(x, y, alt = false) {
+      const hits = hitItemsAt(x, y);
+      if (!hits.length) { if (alt) altPickCycle = null; return -1; }
+      let item = hits[0];
+      if (alt && hits.length > 1) {
+        const samePoint = altPickCycle && Math.abs(altPickCycle.x - x) < 12 && Math.abs(altPickCycle.y - y) < 12;
+        const sameItems = samePoint && altPickCycle.items.length === hits.length && hits.every((entry) => altPickCycle.items.includes(entry));
+        if (!sameItems) altPickCycle = { x, y, items: hits, cursor: 1 };
+        item = altPickCycle.items[altPickCycle.cursor % altPickCycle.items.length];
+        altPickCycle.cursor++;
+        const oldIndex = state.items.indexOf(item);
+        if (oldIndex >= 0 && oldIndex !== state.items.length - 1) {
+          state.items.splice(oldIndex, 1);
+          state.items.push(item);
+        }
+      } else if (!alt) altPickCycle = null;
+      return state.items.indexOf(item);
     }
     function edgeAt(box, x, y) {
       const [x1,y1,x2,y2] = boxPx(box);
@@ -549,7 +617,7 @@ app.registerExtension({
         return true;
       };
       dialog.querySelector(".mb-modal-close").onclick = () => { saveItem(false); saveState(); close(); };
-      dialog.querySelector(".mb-add-item-color").onclick = (event) => openColorPopover(event.currentTarget, (color) => { draftPalette.push(color); renderPalette(); });
+      dialog.querySelector(".mb-add-item-color").onclick = (event) => openColorPopover(event.currentTarget, (color) => { draftPalette.push(color); rememberColor(color); renderPalette(); }, recentColors);
       dialog.querySelector(".mb-save").onclick = () => { if (!saveItem()) return; saveState(); close(); };
       dialog.querySelector(".mb-caption").focus();
       // Keep the editor near the pointer where possible, matching the DENO board workflow.
@@ -576,7 +644,8 @@ app.registerExtension({
           const ix = Math.min(scratch.width - 1, Math.floor((p.px - previewRect.x) / previewRect.w * scratch.width));
           const iy = Math.min(scratch.height - 1, Math.floor((p.py - previewRect.y) / previewRect.h * scratch.height));
           const rgb = sc.getImageData(ix, iy, 1, 1).data;
-          sampleMode.target.push(`#${[...rgb].slice(0, 3).map(v => v.toString(16).padStart(2, "0")).join("")}`);
+          const sampledColor = `#${[...rgb].slice(0, 3).map(v => v.toString(16).padStart(2, "0")).join("")}`;
+          sampleMode.target.push(sampledColor); rememberColor(sampledColor);
           sampleMode = null; canvas.style.cursor = "crosshair";
           $(".mb-preview-note").textContent = "Color sampled";
           syncWidgets(); draw();
@@ -626,8 +695,8 @@ app.registerExtension({
       gesture=null;canvas.style.cursor="crosshair";draw();
     });
     canvas.addEventListener("dblclick", (event) => {
-      event.stopPropagation();const p=canvasPoint(event),hit=boxAt(p.px,p.py,event.altKey);
-      if(hit>=0){selected=hit;draw();openEditor(hit,event.clientX,event.clientY);}
+      event.stopPropagation();const p=canvasPoint(event),hit=event.altKey&&selected>=0?selected:boxAt(p.px,p.py,false);
+      if(hit>=0){selected=hit;saveState();openEditor(hit,event.clientX,event.clientY);}
     });
     const deleteSelectedBox = (event) => {
       const target = event.target;
@@ -650,6 +719,7 @@ app.registerExtension({
     wInput.value = numberFrom(node,"width",1024);hInput.value = numberFrom(node,"height",1024);mpInput.value=numberFrom(node,"megapixels",1);
     if(mpSelect.value!=="Custom")mpInput.value=parseFloat(mpSelect.value);
     wInput.step = hInput.step = "16";
+    boxPixelSpace = { width: roundDimension(wInput.value), height: roundDimension(hInput.value) };
     opacitySlider.value = String(backgroundOpacity);
     function updateBackgroundControls() {
       opacityLabel.textContent = `${backgroundOpacity}%`;
@@ -664,7 +734,7 @@ app.registerExtension({
     ratioSelect.addEventListener("change",()=>syncSizeFields());
     mpSelect.addEventListener("change",()=>{if(mpSelect.value!=="Custom")mpInput.value=parseFloat(mpSelect.value);syncSizeFields();});
     mpInput.addEventListener("input",()=>{mpSelect.value="Custom";syncSizeFields();});
-    for (const input of [wInput,hInput]) input.addEventListener("input",()=>{ratioSelect.value="Custom";mpSelect.value="Custom";mpInput.value=Math.max(.25,((Number(wInput.value)||1024)*(Number(hInput.value)||1024))/1e6).toFixed(2);syncWidgets();draw();});
+    for (const input of [wInput,hInput]) input.addEventListener("input",()=>{ratioSelect.value="Custom";mpSelect.value="Custom";mpInput.value=Math.max(.25,((Number(wInput.value)||1024)*(Number(hInput.value)||1024))/1e6).toFixed(2);rebaseBoxesForPixelSize(wInput.value,hInput.value);syncWidgets();draw();});
     opacitySlider.addEventListener("input",()=>{backgroundOpacity=Math.max(0,Math.min(100,Number(opacitySlider.value)||0));updateBackgroundControls();syncWidgets();draw();});
     eyeButton.addEventListener("click",()=>{backgroundVisible=!backgroundVisible;updateBackgroundControls();syncWidgets();draw();});
     $(".mb-clear-all").addEventListener("click",()=>{
@@ -678,39 +748,24 @@ app.registerExtension({
         suppressLayoutInput: inputLinked,
         suppressLayoutHash: inputLinked ? (state.lastLayoutInputHash || "") : "",
       };
-      selected = -1; sampleMode = null; summary.value = ""; meta.value = ""; canvasType.value = ""; summaryPalette = [];
+      selected = -1; sampleMode = null; summary.value = ""; meta.value = ""; canvasType.value = ""; summaryPalette = []; recentColors = [];
       ratioSelect.value = "1:1"; mpSelect.value = "1 MP"; mpInput.value = "1"; wInput.value = "1024"; hInput.value = "1024";
+      boxPixelSpace = { width: 1024, height: 1024 };
       syncWidgets(); draw();
     });
     function swapOrientationPreservingBoxes() {
       const oldWidth = roundDimension(wInput.value), oldHeight = roundDimension(hInput.value);
-      const oldRects = state.items.map(item => {
-        const b = item.bbox || [0, 0, 1, 1];
-        return {cx:(b[0]+b[2])/2,cy:(b[1]+b[3])/2,w:(b[2]-b[0])*oldWidth,h:(b[3]-b[1])*oldHeight};
-      });
-      if (ratioSelect.value === "Custom") {
-        const oldWidth = wInput.value; wInput.value = hInput.value; hInput.value = oldWidth;
-      } else {
-        const swapped = ratioSelect.value.replace(/(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)/,(_,a,b)=>`${b}:${a}`);
-        ratioSelect.value = swapped;
-        if (!ratioOptions.includes(swapped)) {
-          const [width,height] = calculatedSize();
-          wInput.value = width; hInput.value = height; ratioSelect.value = "Custom";
-        }
-      }
-      const newWidth = roundDimension(wInput.value), newHeight = roundDimension(hInput.value);
-      state.items.forEach((item,index)=>{
-        const box=oldRects[index], bw=Math.min(box.w,newWidth), bh=Math.min(box.h,newHeight);
-        const cx=Math.max(bw/2,Math.min(newWidth-bw/2,box.cx*newWidth));
-        const cy=Math.max(bh/2,Math.min(newHeight-bh/2,box.cy*newHeight));
-        item.bbox=[(cx-bw/2)/newWidth,(cy-bh/2)/newHeight,(cx+bw/2)/newWidth,(cy+bh/2)/newHeight];
-      });
+      const swapped = ratioSelect.value.replace(/(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)/,(_,a,b)=>`${b}:${a}`);
+      wInput.value = oldHeight; hInput.value = oldWidth;
+      if (ratioOptions.includes(swapped)) ratioSelect.value = swapped;
+      else { ratioSelect.value = "Custom"; mpSelect.value = "Custom"; mpInput.value = (oldWidth * oldHeight / 1e6).toFixed(2); }
+      rebaseBoxesForPixelSize(wInput.value, hInput.value);
       syncWidgets();draw();
     }
     $(".mb-swap").addEventListener("click",swapOrientationPreservingBoxes);
     summary.addEventListener("input",syncWidgets);meta.addEventListener("input",syncWidgets);canvasType.addEventListener("change",syncWidgets);
-    $(".mb-add-summary-color").addEventListener("click",(event)=>openColorPopover(event.currentTarget,(color)=>{summaryPalette.push(color);syncWidgets();draw();}));$(".mb-pick-summary").addEventListener("click",()=>{sampleMode={target:summaryPalette};canvas.style.cursor="copy";$(".mb-preview-note").textContent="Click the preview to sample a color";});
-    savedState.addEventListener("input",()=>{try{const parsed=JSON.parse(savedState.value);if(Array.isArray(parsed.items)){state=parsed;summaryPalette=Array.isArray(parsed.summaryPalette)?parsed.summaryPalette:[];backgroundOpacity=clampPercent(parsed.backgroundOpacity);backgroundVisible=parsed.backgroundVisible!==false;opacitySlider.value=String(backgroundOpacity);updateBackgroundControls();selected=-1;setValue(node,"editor_state",savedState.value);draw();}}catch{}});
+    $(".mb-add-summary-color").addEventListener("click",(event)=>openColorPopover(event.currentTarget,(color)=>{summaryPalette.push(color);rememberColor(color);syncWidgets();draw();},recentColors));$(".mb-pick-summary").addEventListener("click",()=>{sampleMode={target:summaryPalette};canvas.style.cursor="copy";$(".mb-preview-note").textContent="Click the preview to sample a color";});
+    savedState.addEventListener("input",()=>{try{const parsed=JSON.parse(savedState.value);if(Array.isArray(parsed.items)){state=parsed;summaryPalette=Array.isArray(parsed.summaryPalette)?parsed.summaryPalette:[];recentColors=Array.isArray(parsed.recentColors)?parsed.recentColors.filter((color)=>/^#[0-9a-f]{6}$/i.test(color)).slice(0,10):[];backgroundOpacity=clampPercent(parsed.backgroundOpacity);backgroundVisible=parsed.backgroundVisible!==false;opacitySlider.value=String(backgroundOpacity);updateBackgroundControls();selected=-1;setValue(node,"editor_state",savedState.value);draw();}}catch{}});
     stateToggle.addEventListener("click",()=>{savedState.classList.toggle("open");stateToggle.textContent=savedState.classList.contains("open")?"Advanced ▾":"Advanced ▸";});
 
     function setPreview(ref, label="Latest image preview", force=false) {
@@ -818,7 +873,7 @@ app.registerExtension({
           const output = event.detail?.output || {};
           const rawWidth = output.width ?? output.ui?.width, rawHeight = output.height ?? output.ui?.height;
           const outWidth = Number(Array.isArray(rawWidth)?rawWidth[0]:rawWidth), outHeight = Number(Array.isArray(rawHeight)?rawHeight[0]:rawHeight);
-          if (outWidth > 0 && outHeight > 0) { ratioSelect.value="Custom"; wInput.value=outWidth; hInput.value=outHeight; syncWidgets(); draw(); }
+          if (outWidth > 0 && outHeight > 0) { ratioSelect.value="Custom"; rebaseBoxesForPixelSize(outWidth,outHeight); wInput.value=outWidth; hInput.value=outHeight; syncWidgets(); draw(); }
         }
         return;
       }
@@ -865,6 +920,7 @@ app.registerExtension({
         setValue(node, "editor_state", savedState.value);
       }
       ratioSelect.value = echo?.aspect_ratio || (linkedInput(node, "background_resize") ? "Custom" : ratioSelect.value);
+      rebaseBoxesForPixelSize(outWidth, outHeight);
       wInput.value = outWidth;
       hInput.value = outHeight;
       if (echo?.source === "wired_dimensions") {
@@ -917,6 +973,7 @@ app.registerExtension({
       // restored workflow values with the temporary defaults shown at creation.
       state = readState(node);
       summaryPalette = Array.isArray(state.summaryPalette) ? state.summaryPalette : [];
+      recentColors = Array.isArray(state.recentColors) ? state.recentColors.filter((color) => /^#[0-9a-f]{6}$/i.test(color)).slice(0, 10) : [];
       backgroundOpacity = clampPercent(state.backgroundOpacity);
       backgroundVisible = state.backgroundVisible !== false;
 
@@ -929,6 +986,7 @@ app.registerExtension({
       hInput.value = numberFrom(node, "height", 1024);
       mpInput.value = numberFrom(node, "megapixels", 1);
       if (mpSelect.value !== "Custom") mpInput.value = parseFloat(mpSelect.value);
+      boxPixelSpace = { width: roundDimension(wInput.value), height: roundDimension(hInput.value) };
       summary.value = getValue(node, "summary", "");
       meta.value = getValue(node, "summary_meta", "");
       canvasType.value = ["single", "multi_panel", "collage"].includes(state.summaryCanvas) ? state.summaryCanvas : "";
@@ -989,6 +1047,7 @@ app.registerExtension({
       info.addEventListener("mouseenter",show);info.addEventListener("focus",show);info.addEventListener("mouseleave",()=>{showHelp?.remove();showHelp=null;});info.addEventListener("blur",()=>{showHelp?.remove();showHelp=null;});
     }
     if(ratioSelect.value!=="Custom") { const [initialWidth,initialHeight]=calculatedSize();wInput.value=initialWidth;hInput.value=initialHeight; }
+    boxPixelSpace = { width: roundDimension(wInput.value), height: roundDimension(hInput.value) };
     savedState.value=JSON.stringify(state);
     syncWidgets();draw();syncConnectedBackground();
   },
