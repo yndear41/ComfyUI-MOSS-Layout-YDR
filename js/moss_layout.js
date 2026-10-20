@@ -524,11 +524,16 @@ app.registerExtension({
     }
     function paintPreview() {
       if (!latestPreview?.complete || !latestPreview.naturalWidth) return;
-      const r = fieldRect(), scale = Math.min(r.w / latestPreview.naturalWidth, r.h / latestPreview.naturalHeight);
+      const r = fieldRect(), scale = Math.max(r.w / latestPreview.naturalWidth, r.h / latestPreview.naturalHeight);
       const w = latestPreview.naturalWidth * scale, h = latestPreview.naturalHeight * scale;
-      previewRect = {x:r.x+(r.w-w)/2,y:r.y+(r.h-h)/2,w,h};
+      const x = r.x + (r.w - w) / 2, y = r.y + (r.h - h) / 2;
+      previewRect = { x: r.x, y: r.y, w: r.w, h: r.h, imageX: x, imageY: y, imageW: w, imageH: h };
       if (!backgroundVisible || backgroundOpacity <= 0) return;
-      ctx.save(); ctx.globalAlpha = backgroundOpacity / 100; ctx.drawImage(latestPreview, previewRect.x, previewRect.y, w, h); ctx.restore();
+      ctx.save();
+      ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
+      ctx.globalAlpha = backgroundOpacity / 100;
+      ctx.drawImage(latestPreview, x, y, w, h);
+      ctx.restore();
     }
     function draw() {
       ctx.clearRect(0, 0, CW, CH);
@@ -733,8 +738,8 @@ app.registerExtension({
           const scratch = document.createElement("canvas");
           scratch.width = latestPreview.naturalWidth; scratch.height = latestPreview.naturalHeight;
           const sc = scratch.getContext("2d"); sc.drawImage(latestPreview, 0, 0);
-          const ix = Math.min(scratch.width - 1, Math.floor((p.px - previewRect.x) / previewRect.w * scratch.width));
-          const iy = Math.min(scratch.height - 1, Math.floor((p.py - previewRect.y) / previewRect.h * scratch.height));
+          const ix = Math.max(0, Math.min(scratch.width - 1, Math.floor((p.px - previewRect.imageX) / previewRect.imageW * scratch.width)));
+          const iy = Math.max(0, Math.min(scratch.height - 1, Math.floor((p.py - previewRect.imageY) / previewRect.imageH * scratch.height)));
           const rgb = sc.getImageData(ix, iy, 1, 1).data;
           const sampledColor = `#${[...rgb].slice(0, 3).map(v => v.toString(16).padStart(2, "0")).join("")}`;
           sampleMode.target.push(sampledColor); rememberColor(sampledColor);
