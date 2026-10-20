@@ -1,3 +1,10 @@
+warning: in the working copy of 'CHANGELOG.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'THIRD_PARTY_NOTICES.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'examples/README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'js/moss_layout.js', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'moss_layout.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'pyproject.toml', LF will be replaced by CRLF the next time Git touches it
 // SPDX-License-Identifier: GPL-3.0-only
 // The visual editor and interaction model adapt patterns shared by Deno2026
 // (https://github.com/Deno2026/comfyui-deno-custom-nodes), under GPL-3.0-only.
@@ -346,6 +353,9 @@ app.registerExtension({
       resizeFrame = requestAnimationFrame(() => {
         resizeFrame = 0;
         syncBoardSize();
+        // Repaint against the new canvas bounds during the resize itself. Without
+        // this, the browser stretches the previous bitmap until the next edit.
+        draw();
         const board = root.querySelector(".mb-canvas");
         const rect = board?.getBoundingClientRect();
         if (rect?.width > 0 && rect?.height > 0) {
