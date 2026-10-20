@@ -502,7 +502,25 @@ app.registerExtension({
     function canvasPoint(event) {
       const cr = canvas.getBoundingClientRect();
       const x = (event.clientX - cr.left) * CW / cr.width, y = (event.clientY - cr.top) * CH / cr.height;
-      return { px: x, py: y, x: Math.max(0, Math.min(1, x / CW)), y: Math.max(0, Math.min(1, y / CH)), inside: x >= 0 && x <= CW && y >= 0 && y <= CH };
+      const frame = fieldRect();
+      const inside = x >= frame.x && x <= frame.x + frame.w && y >= frame.y && y <= frame.y + frame.h;
+      return { px: x, py: y, x: Math.max(0, Math.min(1, x / CW)), y: Math.max(0, Math.min(1, y / CH)), inside };
+    }
+    function clampPointToGeneration(point) {
+      const frame = fieldRect();
+      const px = Math.max(frame.x, Math.min(frame.x + frame.w, point.px));
+      const py = Math.max(frame.y, Math.min(frame.y + frame.h, point.py));
+      return { ...point, px, py, x: px / CW, y: py / CH, inside: true };
+    }
+    function constrainBoxToGeneration(box) {
+      const frame = fieldRect();
+      const left = frame.x / CW, top = frame.y / CH;
+      const right = (frame.x + frame.w) / CW, bottom = (frame.y + frame.h) / CH;
+      const width = Math.min(right - left, Math.max(.008, box[2] - box[0]));
+      const height = Math.min(bottom - top, Math.max(.008, box[3] - box[1]));
+      const x1 = Math.max(left, Math.min(right - width, box[0]));
+      const y1 = Math.max(top, Math.min(bottom - height, box[1]));
+      return [x1, y1, x1 + width, y1 + height];
     }
     function paintPreview() {
       if (!latestPreview?.complete || !latestPreview.naturalWidth) return;
@@ -519,6 +537,7 @@ app.registerExtension({
       ctx.fillStyle = "#252b2d"; ctx.fillRect(r.x, r.y, r.w, r.h);
       paintPreview();
       ctx.strokeStyle = "rgba(205,216,219,.46)"; ctx.lineWidth = 1.5; ctx.setLineDash([7, 6]); ctx.strokeRect(r.x, r.y, r.w, r.h); ctx.setLineDash([]);
+      ctx.save(); ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
       state.items.forEach((item, index) => {
         const [x1, y1, x2, y2] = boxPx(item.bbox || [0, 0, 1, 1]);
         const color = visualBoxColor(item);
@@ -579,6 +598,7 @@ app.registerExtension({
           for (const [x, y] of [[x1,y1],[x2,y1],[x1,y2],[x2,y2]]) { ctx.beginPath(); ctx.arc(x,y,4,0,Math.PI*2); ctx.fill(); }
         }
       });
+      ctx.restore();
       if (gesture?.mode === "create" && gesture.current) {
         const a = gesture.start, b = gesture.current;
         const x = Math.min(a.x,b.x)*CW, y = Math.min(a.y,b.y)*CH;
@@ -633,8 +653,11 @@ app.registerExtension({
                    Math.max(0, Math.min(1, x2/CW)), Math.max(0, Math.min(1, y2/CH))];
     }
     function createBox(start, end) {
+      start = clampPointToGeneration(start);
+      end = clampPointToGeneration(end);
       const item = { label: "object", caption: "", bbox: [Math.min(start.x,end.x),Math.min(start.y,end.y),Math.max(start.x,end.x),Math.max(start.y,end.y)] };
       if (item.bbox[2] - item.bbox[0] < .008 || item.bbox[3] - item.bbox[1] < .008) return;
+      item.bbox = constrainBoxToGeneration(item.bbox);
       state.items.push(item); selected = state.items.length - 1; saveState();
     }
 
@@ -746,8 +769,8 @@ app.registerExtension({
     });
     canvas.addEventListener("pointermove", (event) => {
       const p = canvasPoint(event);
-      if (!gesture) { const hit=boxAt(p.px,p.py,false);canvas.style.cursor=hit>=0?(edgeAt(state.items[hit].bbox,p.px,p.py)==="move"?"move":"nwse-resize"):"crosshair";return; }
-      if (gesture.mode === "create") { gesture.current = p; draw(); return; }
+      if (!gesture) { const hit=p.inside?boxAt(p.px,p.py,false):-1;canvas.style.cursor=hit>=0?(edgeAt(state.items[hit].bbox,p.px,p.py)==="move"?"move":"nwse-resize"):"crosshair";return; }
+      if (gesture.mode === "create") { gesture.current = clampPointToGeneration(p); draw(); return; }
       const box = [...gesture.original], dx = (p.px - gesture.start.px) / CW, dy = (p.py - gesture.start.py) / CH;
       if (gesture.mode === "move") { box[0]+=dx;box[2]+=dx;box[1]+=dy;box[3]+=dy; }
       else { if (gesture.mode.includes("l")) box[0]+=dx;if (gesture.mode.includes("r")) box[2]+=dx;if (gesture.mode.includes("t")) box[1]+=dy;if (gesture.mode.includes("b")) box[3]+=dy; }
@@ -755,7 +778,7 @@ app.registerExtension({
       const ex=Math.max(0,Math.min(1,box[2])),ey=Math.max(0,Math.min(1,box[3]));
       if (gesture.mode === "move") {const bw=box[2]-box[0],bh=box[3]-box[1];box[0]=Math.max(0,Math.min(1-bw,box[0]));box[2]=box[0]+bw;box[1]=Math.max(0,Math.min(1-bh,box[1]));box[3]=box[1]+bh;}
       else {box[0]=Math.min(nx,ex);box[2]=Math.max(nx,ex);box[1]=Math.min(ny,ey);box[3]=Math.max(ny,ey);}
-      state.items[selected].bbox=box;draw();
+      state.items[selected].bbox=constrainBoxToGeneration(box);draw();
     });
     canvas.addEventListener("pointerup", (event) => {
       if (!gesture) return;
@@ -764,7 +787,7 @@ app.registerExtension({
       gesture=null;canvas.style.cursor="crosshair";draw();
     });
     canvas.addEventListener("dblclick", (event) => {
-      event.stopPropagation();const p=canvasPoint(event),hit=event.altKey&&selected>=0?selected:boxAt(p.px,p.py,false);
+      event.stopPropagation();const p=canvasPoint(event);if(!p.inside)return;const hit=event.altKey&&selected>=0?selected:boxAt(p.px,p.py,false);
       if(hit>=0){selected=hit;saveState();openEditor(hit,event.clientX,event.clientY);}
     });
     const deleteSelectedBox = (event) => {
