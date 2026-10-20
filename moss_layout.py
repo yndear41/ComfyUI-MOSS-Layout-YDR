@@ -445,8 +445,48 @@ class MOSSLayoutComposer:
                 round_down=resizing_background,
             )
 
+        normalize_source = source
+        if not imported_layout and isinstance(source, dict) and source.get("coordinateSpace") == "workspace":
+            # Editor boxes use stable normalized coordinates over the full working
+            # field. Crop that field to MOSS's selected generation aspect only at
+            # serialization time so changing the aspect never moves the boxes.
+            normalize_source = dict(source)
+            raw_items = source.get("items", [])
+            try:
+                workspace_aspect = float(source.get("workspaceAspect", 1.0))
+            except (TypeError, ValueError):
+                workspace_aspect = 1.0
+            if not math.isfinite(workspace_aspect) or workspace_aspect <= 0:
+                workspace_aspect = 1.0
+            target_aspect = width / height
+            relative_aspect = target_aspect / workspace_aspect
+            if relative_aspect >= 1:
+                frame_width, frame_height = 1.0, 1.0 / relative_aspect
+            else:
+                frame_width, frame_height = relative_aspect, 1.0
+            frame_left, frame_top = (1.0 - frame_width) / 2, (1.0 - frame_height) / 2
+            mapped_items = []
+            if isinstance(raw_items, list):
+                for entry in raw_items:
+                    if not isinstance(entry, dict):
+                        continue
+                    mapped = dict(entry)
+                    try:
+                        x1, y1, x2, y2 = [float(value) for value in entry.get("bbox", [])]
+                    except (TypeError, ValueError):
+                        mapped_items.append(mapped)
+                        continue
+                    mapped["bbox"] = [
+                        max(0.0, min(1.0, (x1 - frame_left) / frame_width)),
+                        max(0.0, min(1.0, (y1 - frame_top) / frame_height)),
+                        max(0.0, min(1.0, (x2 - frame_left) / frame_width)),
+                        max(0.0, min(1.0, (y2 - frame_top) / frame_height)),
+                    ]
+                    mapped_items.append(mapped)
+            normalize_source["items"] = mapped_items
+
         items = normalize_items(
-            source, width, height,
+            normalize_source, width, height,
             source_width=source_width if imported_layout else None,
             source_height=source_height if imported_layout else None,
             bbox_coord_space=source.get("bbox_coord_space", "abs") if isinstance(source, dict) else "abs",
@@ -549,3 +589,4 @@ class MOSSLayoutComposer:
             "ui": ui,
             "result": result,
         }
+
