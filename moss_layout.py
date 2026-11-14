@@ -69,7 +69,7 @@ def calculate_size(aspect_ratio, resolution, width, height, megapixels, portrait
     return _snap_dimension(w, quantum, round_down), _snap_dimension(h, quantum, round_down)
 
 
-def _external_size(aspect_ratio, width, height, input_width, input_height, quantum):
+def _external_size(aspect_ratio, width, height, input_width, input_height, quantum, portrait=False):
     """Resolve wired size controls while preserving the chosen aspect when only one is wired."""
     try:
         wired_width = float(input_width) if input_width is not None else None
@@ -90,6 +90,8 @@ def _external_size(aspect_ratio, width, height, input_width, input_height, quant
     else:
         rw, rh = ASPECTS.get(aspect_ratio, LEGACY_ASPECTS.get(aspect_ratio, (1, 1)))
         ratio = rw / rh
+        if portrait:
+            ratio = 1 / ratio
     out_width = wired_width if wired_width is not None else wired_height * ratio
     out_height = wired_height if wired_height is not None else wired_width / ratio
     if wired_width is not None and wired_height is not None:
@@ -429,7 +431,8 @@ class MOSSLayoutComposer:
         if use_layout_canvas:
             aspect_ratio = "Custom"
         wired_size = None if resizing_background else _external_size(
-            size_aspect, size_width, size_height, input_width, input_height, quantum
+            size_aspect, size_width, size_height, input_width, input_height, quantum,
+            portrait=portrait,
         )
         if wired_size is not None:
             width, height = wired_size
@@ -536,6 +539,7 @@ class MOSSLayoutComposer:
                 "width": width,
                 "height": height,
                 "aspect_ratio": "Custom" if resizing_background or wired_size is not None else aspect_ratio,
+                "portrait": bool(portrait),
                 "megapixels": target_megapixels,
                 "input_megapixels_active": input_megapixels_active,
                 "layout_input_hash": layout_input_hash,
