@@ -263,7 +263,7 @@ app.registerExtension({
 
     const root = document.createElement("div");
     root.className = "moss-board";
-    root.title = "Compose a MOSS-Image layout prompt. Draw regions, then double-click a box to edit it.";
+    root.title = "Compose a MOSS-Image layout. Draw regions and double-click to edit; use the mouse wheel to zoom the workflow and hold Space while dragging to pan.";
     root.innerHTML = `
       <div class="mb-head">
         <div class="mb-control"><label title="Choose the generation field proportions. The working field and box positions stay fixed.">Aspect ratio</label><select class="mb-ratio"></select></div>
@@ -276,7 +276,7 @@ app.registerExtension({
         <div class="mb-bg-controls" title="Control the visibility of any image shown in the working field"><input class="mb-bg-opacity" type="range" min="0" max="100" step="1" value="100" aria-label="Background opacity" title="Background opacity"/><span class="mb-bg-opacity-label">100%</span><button class="mb-bg-eye" type="button" aria-label="Hide background" aria-pressed="true" title="Hide background"><svg viewBox="0 0 24 24" aria-hidden="true"><path class="mb-eye-shape" d="M2.5 12s3.4-6 9.5-6 9.5 6 9.5 6-3.4 6-9.5 6-9.5-6-9.5-6Z"/><circle class="mb-eye-shape" cx="12" cy="12" r="2.7"/><path class="mb-eye-slash" d="m4 20 16-16"/></svg></button></div>
       </div>
       <div class="mb-size-row mb-mp-row">
-        <label title="Select a target canvas area. The chosen aspect ratio is preserved.">Resolution</label><select class="mb-mp-select"></select><input class="mb-mp" type="number" min="0.25" max="16" step="0.05" title="Custom canvas area in megapixels"/><span>MP</span><button class="mb-clear-all" type="button" title="Clear all boxes, descriptions, prompt fields, palettes, and size choices">Clear all</button>
+        <label title="MOSS-Image is most reliable around 1–2 MP and is documented to extrapolate to about 4 MP. Higher sizes need more memory and may lose detail.">Resolution</label><select class="mb-mp-select"></select><input class="mb-mp" type="number" min="0.25" max="16" step="0.05" title="Custom canvas area in megapixels. 1–2 MP is a good starting range for MOSS-Image."/><span>MP</span><button class="mb-clear-all" type="button" title="Clear all boxes, descriptions, prompt fields, palettes, and size choices">Clear all</button>
       </div>
       <div class="mb-main">
         <div class="mb-canvas-wrap"><canvas class="mb-canvas" width="${CW}" height="${CH}" tabindex="0" aria-label="Layout canvas"></canvas><div class="mb-empty">Draw a region by dragging on the canvas</div></div>
@@ -285,9 +285,9 @@ app.registerExtension({
           <textarea class="mb-summary" placeholder="Describe the whole image: scene, composition, lighting, and style…" title="Global description of the whole image"></textarea>
           <label title="Optional comma-separated medium or genre tags supported by MOSS-Image.">Summary metadata <span class="mb-info" tabindex="0" data-help="Optional MOSS-Image summary tags such as 'editorial photography, product campaign'. This becomes summary.meta in the JSON. Leave blank if you do not need tags.">i</span></label>
           <textarea class="mb-meta" placeholder="Optional tags, e.g. editorial photography, product campaign" title="Optional medium or genre tags, separated by commas"></textarea>
-          <label title="Optional MOSS canvas structure hint. Choose single image, multi-panel layout, or collage.">Canvas structure</label>
-          <select class="mb-canvas-type" title="Optional MOSS summary.canvas hint"><option value="">Not specified</option><option value="single">Single</option><option value="multi_panel">Multi-panel</option><option value="collage">Collage</option></select>
-          <label title="Optional whole-image palette sent as summary.palette.">Summary palette</label><div class="mb-global-palette"></div><div class="mb-palette-tools"><button class="mb-add-summary-color" type="button" title="Add a color to the whole-image palette">＋ Add color</button><button class="mb-pick-summary" type="button" title="Sample a color from the preview">⌖ Sample</button></div><label>Elements</label><div class="mb-elements" aria-label="Layout elements"></div><div class="mb-preview-note" aria-live="polite">Waiting for a decoded image preview</div>
+          <label title="Optional MOSS summary.canvas hint. It is not required; it can suggest a single image, multi-panel layout, or collage.">Composition layout</label>
+          <select class="mb-canvas-type" title="Optional MOSS summary.canvas hint; leave unspecified unless the composition structure matters"><option value="">Not specified</option><option value="single">Single image</option><option value="multi_panel">Multi-panel</option><option value="collage">Collage</option></select>
+          <label title="Optional whole-image palette sent as summary.palette.">Summary palette</label><div class="mb-global-palette"></div><div class="mb-palette-tools"><button class="mb-add-summary-color" type="button" title="Add a color to the whole-image palette">＋ Add color</button><button class="mb-pick-summary" type="button" title="Sample a color from the preview">⌖ Sample</button></div><label title="Items are sent to MOSS in this order. Add broad background regions first and foreground details last.">Elements</label><div class="mb-elements" aria-label="Layout elements"></div><div class="mb-preview-note" aria-live="polite">Waiting for a decoded image preview</div>
           <div class="mb-advanced"><button class="mb-state-toggle" type="button" title="Show or hide the saved editor state">Advanced ▸</button><textarea class="mb-state" spellcheck="false" aria-label="Saved editor state" title="Raw saved box state. Usually no editing is needed."></textarea></div>
         </aside>
       </div>
@@ -384,6 +384,7 @@ app.registerExtension({
     const opacitySlider = $(".mb-bg-opacity"), opacityLabel = $(".mb-bg-opacity-label"), eyeButton = $(".mb-bg-eye");
     const savedState = $(".mb-state"), stateToggle = $(".mb-state-toggle"), emptyHint = $(".mb-empty");
     let state = readState(node), selected = -1, gesture = null, latestPreview = null, showHelp = null, sampleMode = null, previewRect = null;
+    let landscapeOrientation = state.orientation ? state.orientation === "landscape" : Boolean(getValue(node, "portrait", false));
     const boxUiColors = new WeakMap();
     let altPickCycle = null;
     let backgroundPinned = false, previewSerial = 0, previewBlobUrl = null, lastAutoPreview = null;
@@ -402,7 +403,8 @@ app.registerExtension({
     function ratioValue() {
       const m = String(ratioSelect.value).match(/(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)/);
       if (!m) return numberFrom(node, "width", 1024) / Math.max(1, numberFrom(node, "height", 1024));
-      return parseFloat(m[1]) / parseFloat(m[2]);
+      const ratio = parseFloat(m[1]) / parseFloat(m[2]);
+      return landscapeOrientation && ratio < 1 ? 1 / ratio : ratio;
     }
     function roundDimension(value, roundDown = false) {
       const quantum = 16, units = Number(value) / quantum;
@@ -429,13 +431,14 @@ app.registerExtension({
       state.summaryPalette = summaryPalette;
       state.recentColors = recentColors.slice(0, 10);
       state.coordinateSpace = "workspace";
+      state.orientation = landscapeOrientation ? "landscape" : "portrait";
       const boardRect = canvas.getBoundingClientRect();
       if (boardRect.width > 0 && boardRect.height > 0) state.workspaceAspect = boardRect.width / boardRect.height;
       if (canvasType.value) state.summaryCanvas = canvasType.value;
       else delete state.summaryCanvas;
       state.backgroundOpacity = backgroundOpacity;
       state.backgroundVisible = backgroundVisible;
-      setValue(node, "portrait", false);
+      setValue(node, "portrait", landscapeOrientation);
       savedState.value = JSON.stringify(state);
       setValue(node, "editor_state", savedState.value);
       node.setDirtyCanvas?.(true, true);
@@ -723,6 +726,8 @@ app.registerExtension({
 
     canvas.tabIndex = 0;
     canvas.addEventListener("pointerdown", (event) => {
+      if (app.canvas?.dragging_canvas || app.canvas?.read_only) return;
+      if (event.button !== 0) return;
       if (sampleMode) {
         event.stopPropagation();
         if (event.button !== 0) return;
@@ -846,16 +851,19 @@ app.registerExtension({
         suppressLayoutHash: inputLinked ? (state.lastLayoutInputHash || "") : "",
       };
       selected = -1; sampleMode = null; summary.value = ""; meta.value = ""; canvasType.value = ""; summaryPalette = []; recentColors = [];
+      landscapeOrientation = false;
       ratioSelect.value = "1:1"; mpSelect.value = "1 MP"; mpInput.value = "1"; wInput.value = "1024"; hInput.value = "1024";
       syncWidgets(); draw();
     });
     function swapOrientationPreservingBoxes() {
-      const oldWidth = roundDimension(wInput.value), oldHeight = roundDimension(hInput.value);
-      const swapped = ratioSelect.value.replace(/(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)/,(_,a,b)=>`${b}:${a}`);
-      wInput.value = oldHeight; hInput.value = oldWidth;
-      if (ratioOptions.includes(swapped)) ratioSelect.value = swapped;
-      else { ratioSelect.value = "Custom"; mpSelect.value = "Custom"; mpInput.value = (oldWidth * oldHeight / 1e6).toFixed(2); }
-      syncWidgets();draw();
+      if (ratioSelect.value === "Custom") {
+        const oldWidth = wInput.value;
+        wInput.value = hInput.value;
+        hInput.value = oldWidth;
+      } else {
+        landscapeOrientation = !landscapeOrientation;
+      }
+      syncSizeFields();
     }
     $(".mb-swap").addEventListener("click",swapOrientationPreservingBoxes);
     summary.addEventListener("input",syncWidgets);meta.addEventListener("input",syncWidgets);canvasType.addEventListener("change",syncWidgets);
@@ -1015,6 +1023,7 @@ app.registerExtension({
         setValue(node, "editor_state", savedState.value);
       }
       ratioSelect.value = echo?.aspect_ratio || (linkedInput(node, "background_resize") ? "Custom" : ratioSelect.value);
+      if (typeof echo?.portrait === "boolean") landscapeOrientation = echo.portrait;
       wInput.value = outWidth;
       hInput.value = outHeight;
       if (echo?.source === "wired_dimensions") {
@@ -1075,6 +1084,8 @@ app.registerExtension({
       const configuredRatio = getValue(node, "aspect_ratio", "1:1");
       const ratioPart = String(configuredRatio).match(/\d+(?:\.\d+)?:\d+(?:\.\d+)?/)?.[0];
       ratioSelect.value = ratioOptions.includes(configuredRatio) ? configuredRatio : (ratioOptions.includes(ratioPart) ? ratioPart : "Custom");
+      landscapeOrientation = state.orientation ? state.orientation === "landscape" : Boolean(getValue(node, "portrait", false));
+      state.orientation = landscapeOrientation ? "landscape" : "portrait";
       const configuredResolution = getValue(node, "resolution", "1 MP");
       mpSelect.value = mpOptions.includes(configuredResolution) ? configuredResolution : "1 MP";
       wInput.value = numberFrom(node, "width", 1024);
@@ -1135,8 +1146,21 @@ app.registerExtension({
       return previousOnRemoved?.apply(this, args);
     };
 
-    root.addEventListener("pointerdown",(event)=>event.stopPropagation());
-    root.addEventListener("wheel",(event)=>event.stopPropagation(),{passive:true});
+    root.addEventListener("pointerdown",(event)=>{
+      const graphPan = event.button === 1 || event.button === 2 || app.canvas?.dragging_canvas || app.canvas?.read_only;
+      if (!graphPan) event.stopPropagation();
+    });
+    root.addEventListener("wheel",(event)=>{
+      let element = event.target instanceof Element ? event.target : null;
+      while (element && root.contains(element)) {
+        const canScrollY = element.scrollHeight > element.clientHeight + 1 &&
+          (event.deltaY < 0 ? element.scrollTop > 0 : element.scrollTop + element.clientHeight < element.scrollHeight - 1);
+        const canScrollX = element.scrollWidth > element.clientWidth + 1 &&
+          (event.deltaX < 0 ? element.scrollLeft > 0 : element.scrollLeft + element.clientWidth < element.scrollWidth - 1);
+        if (canScrollY || canScrollX) { event.stopPropagation(); return; }
+        element = element.parentElement;
+      }
+    },{passive:true});
     for(const info of root.querySelectorAll(".mb-info")){
       const show=()=>{if(showHelp)showHelp.remove();const pop=document.createElement("div");pop.className="mb-help-pop";pop.textContent=info.dataset.help;document.body.append(pop);const r=info.getBoundingClientRect();pop.style.left=`${Math.min(innerWidth-270,r.left)}px`;pop.style.top=`${r.bottom+5}px`;showHelp=pop;};
       info.addEventListener("mouseenter",show);info.addEventListener("focus",show);info.addEventListener("mouseleave",()=>{showHelp?.remove();showHelp=null;});info.addEventListener("blur",()=>{showHelp?.remove();showHelp=null;});
