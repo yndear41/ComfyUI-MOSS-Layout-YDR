@@ -595,6 +595,35 @@ app.registerExtension({
       });
       return fields;
     }
+    function buildEnhancementContext() {
+      const [width, height] = calculatedSize();
+      const items = state.items.map((item, index) => {
+        if (!item || typeof item !== "object") return null;
+        const bbox = Array.isArray(item.bbox) && item.bbox.length === 4
+          ? item.bbox.map((value) => Number.isFinite(Number(value)) ? Number(Number(value).toFixed(5)) : 0)
+          : [0, 0, 1, 1];
+        const contextItem = {
+          id: `item.${index}`,
+          label: TYPE_NAME[item.label] || "Object",
+          bbox,
+        };
+        for (const key of ["caption", "text"]) if (typeof item[key] === "string" && item[key].trim()) contextItem[key] = item[key];
+        if (Array.isArray(item.tags) && item.tags.length) contextItem.tags = item.tags.filter((tag) => typeof tag === "string" && tag.trim());
+        if (Array.isArray(item.palette) && item.palette.length) contextItem.palette = item.palette;
+        return contextItem;
+      }).filter(Boolean);
+      return {
+        target_size_px: { width, height },
+        workspace: { size: [CW, CH], bbox_format: "xyxy", coordinate_space: "normalized 0–1 relative to the fixed working field" },
+        summary: {
+          caption: String(summary.value || "").trim(),
+          meta: sourceMetaParts(meta.value),
+          canvas: canvasType.value || "not specified",
+          palette: summaryPalette,
+        },
+        items,
+      };
+    }
     async function enhanceFields(fields, button = null) {
       if (enhancerBusy || translationBusy) return;
       const filled = fields.filter((field) => typeof field.text === "string" && field.text.trim());
@@ -616,7 +645,7 @@ app.registerExtension({
         const response = await fetch(enhancerUrl("run"), {
           method: "POST", credentials: "same-origin",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ node_id: String(node.id), segments: filled.map(({ id, type, text }) => ({ id, type, text })), settings }),
+          body: JSON.stringify({ node_id: String(node.id), segments: filled.map(({ id, type, text }) => ({ id, type, text })), context: buildEnhancementContext(), settings }),
         });
         const result = await response.json();
         if (!response.ok || result.status !== "ready") throw new Error(result.error || "Text enhancement failed.");

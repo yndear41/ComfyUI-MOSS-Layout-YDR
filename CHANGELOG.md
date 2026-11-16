@@ -5,6 +5,7 @@
 - Add in-node prompt enhancement buttons for individual text fields and all filled fields, using ComfyUI's native Generate Text engine.
 - Reuse the CLIP model connected to the node through one shared input; keep one generation settings panel and save its settings and system prompt in the workflow without changing box geometry or labels.
 - Migrate saved node socket layouts by adding the CLIP input and removing obsolete translated outputs.
+- Give each text-generation request the full layout as context while keeping edits scoped to the selected field and its bounding box.
 - Fix editor scaling in Legacy nodes by removing the fixed DOM-widget size, keeping a shrinkable minimum, and sizing the board to the node after resize; keep the canvas and right-hand panel clipped to the node bounds in both frontends.
 - Place Advanced editor state inside the scrollable right panel so it stays aligned with the node edge at different sizes.
 - Keep the single maintainer-supplied MOSS workflow as the only example workflow.

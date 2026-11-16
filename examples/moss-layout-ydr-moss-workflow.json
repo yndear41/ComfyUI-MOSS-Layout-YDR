@@ -967,6 +967,12 @@
           "shape": 7,
           "type": "FLOAT",
           "link": null
+        },
+        {
+          "name": "clip",
+          "shape": 7,
+          "type": "CLIP",
+          "link": null
         }
       ],
       "outputs": [

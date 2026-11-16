@@ -25,7 +25,7 @@ Translation is optional. To enable it, install [`requirements-translategemma.txt
 
 ## Generate prompt text
 
-Use **Generate** beside Summary, Summary metadata, or a box field to rewrite only that field. **Generate all** processes the filled summary, metadata, box descriptions, exact visible text, and tags while leaving box geometry and labels untouched. Results replace the edited text in the workflow, just like manual edits.
+Use **Generate** beside Summary, Summary metadata, or a box field to rewrite only that field. Every request receives the complete layout context—summary, metadata, every box's label, coordinates, description, exact text, tags, and palette—so fields stay consistent. A box's own content and coordinates take priority over global text and other boxes, keeping subjects scoped to their intended region. **Generate all** processes the filled summary, metadata, box descriptions, exact visible text, and tags while leaving box geometry and labels untouched. Results replace the edited text in the workflow, just like manual edits.
 
 Connect the same **CLIP** output used by your **Generate Text** node to MOSS Layout YDR's **clip** input, then run the workflow once so the node can keep that encoder available for its in-node Generate buttons. The buttons reuse ComfyUI's native Generate Text engine. Open the single gear button to edit settings shared by every Generate button, including the system prompt; these settings are saved with the workflow. Run text generation while the ComfyUI queue is idle. The cached encoder reference is released when the node is removed or the workflow is run with its CLIP input disconnected.
 
