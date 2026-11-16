@@ -51,11 +51,58 @@ function setValue(node, name, value) {
   item.value = value;
   item.callback?.(value, app.canvas, node);
 }
+function mergeSavedEnhancerSettings(node, state) {
+  try {
+    const saved = JSON.parse(getValue(node, "prompt_enhancer_settings", "{}") || "{}");
+    if (saved && typeof saved === "object" && !Array.isArray(saved) && Object.keys(saved).length) {
+      state.promptEnhancerSettings = saved;
+    }
+  } catch {}
+  return state;
+}
+function migrateLegacyTranslation(node, state) {
+  const saved = state?.translated;
+  const values = saved?.status === "ready" && saved.values && typeof saved.values === "object" ? saved.values : null;
+  if (state?.translationView && values) {
+    if (typeof values["summary.caption"] === "string") setValue(node, "summary", values["summary.caption"]);
+    const rawMeta = String(getValue(node, "summary_meta", "") || "");
+    const sourceMeta = rawMeta.split(",").map((entry) => entry.trim()).filter(Boolean);
+    const metaOverride = values["summary.meta_override"];
+    const translatedMeta = typeof metaOverride === "string" ? metaOverride
+      : Array.isArray(metaOverride) ? metaOverride.join(", ")
+        : sourceMeta.map((entry, index) => values[`summary.meta.${index}`] ?? entry).join(", ");
+    setValue(node, "summary_meta", translatedMeta);
+    (state.items || []).forEach((item, index) => {
+      if (!item || typeof item !== "object") return;
+      for (const field of ["caption", "text"]) {
+        const value = values[`item.${index}.${field}`];
+        if (typeof value !== "string") continue;
+        if (field === "text" && !value.trim()) delete item.text;
+        else item[field] = value;
+      }
+      const tagsOverride = values[`item.${index}.tags_override`];
+      if (Array.isArray(tagsOverride)) {
+        if (tagsOverride.length) item.tags = tagsOverride; else delete item.tags;
+      } else if (Array.isArray(item.tags)) {
+        item.tags = item.tags.map((entry, tagIndex) => values[`item.${index}.tags.${tagIndex}`] ?? entry);
+      }
+    });
+    if (linkedInput(node, "layout_text") && state.lastLayoutInputHash) {
+      state.suppressLayoutInput = true;
+      state.suppressLayoutHash = state.lastLayoutInputHash;
+    }
+  }
+  if (state && typeof state === "object") {
+    delete state.translated;
+    delete state.translationView;
+  }
+  return state;
+}
 function readState(node) {
   try {
     const value = JSON.parse(getValue(node, "editor_state", "{}"));
-    return Array.isArray(value.items) ? value : { items: [] };
-  } catch { return { items: [] }; }
+    return migrateLegacyTranslation(node, mergeSavedEnhancerSettings(node, Array.isArray(value.items) ? value : { items: [] }));
+  } catch { return mergeSavedEnhancerSettings(node, { items: [] }); }
 }
 function linkedInput(node, name) {
   const input = node.inputs?.find((item) => item.name === name);
@@ -232,6 +279,10 @@ app.registerExtension({
       if (Array.isArray(importedLayouts) && importedLayouts.length) {
         window.dispatchEvent(new CustomEvent("moss-layout-import", { detail: { nodeId, output: detail.output } }));
       }
+      const replacements = detail?.output?.moss_layout_replace ?? detail?.output?.ui?.moss_layout_replace;
+      if (Array.isArray(replacements) && replacements.length) {
+        window.dispatchEvent(new CustomEvent("moss-layout-replace", { detail: { nodeId, output: detail.output } }));
+      }
       window.dispatchEvent(new CustomEvent("moss-layout-refresh-background", { detail: { nodeId } }));
     };
     app.api?.addEventListener?.("executed", (event) => {
@@ -250,12 +301,19 @@ app.registerExtension({
   },
   async nodeCreated(node) {
     if (node.comfyClass !== "MOSSLayoutComposer" && node.type !== "MOSSLayoutComposer") return;
+    // Existing workflow JSON stores socket lists on each node. Migrate old
+    // saved instances to the current backend schema when ComfyUI restores them.
+    for (let index = (node.outputs?.length || 0) - 1; index >= 0; index--) {
+      const name = String(node.outputs[index]?.name || "").trim().toLowerCase();
+      if (["translated", "translated_json", "translated_prompt"].includes(name)) node.removeOutput?.(index);
+    }
+    if (!node.inputs?.some((input) => input.name === "clip")) node.addInput?.("clip", "CLIP");
     if (node.widgets?.some((item) => item.name === WIDGET)) return;
     guardCanvasDeleteKey();
 
     // Backend widgets remain serialized and connectable; the DOM board is their compact UI.
     for (const item of node.widgets || []) {
-      if (["summary", "aspect_ratio", "width", "height", "resolution", "megapixels", "dimension_multiple", "portrait", "editor_state", "summary_meta"].includes(item.name)) {
+      if (["summary", "aspect_ratio", "width", "height", "resolution", "megapixels", "dimension_multiple", "portrait", "editor_state", "prompt_enhancer_settings", "summary_meta"].includes(item.name)) {
         item.computeSize = () => [0, -4];
         item.type = "hidden";
       }
@@ -281,9 +339,11 @@ app.registerExtension({
       <div class="mb-main">
         <div class="mb-canvas-wrap"><canvas class="mb-canvas" width="${CW}" height="${CH}" tabindex="0" aria-label="Layout canvas"></canvas><div class="mb-empty">Draw a region by dragging on the canvas</div></div>
         <aside class="mb-prompt">
-          <label title="Describe the complete image: scene, composition, lighting, style, and visual relationships.">Summary <span class="mb-info" tabindex="0" data-help="Describe the whole image in natural language: scene, composition, lighting, style, and how the elements relate. Keep box-specific appearance in each box description.">i</span></label>
+          <div class="mb-translation-row"><button class="mb-translate-open" type="button" title="Translate and replace all prompt text locally with TranslateGemma">Translate & replace…</button><label class="mb-auto-translate-label" title="Translate and replace current prompt text on every workflow run"><input class="mb-auto-translate" type="checkbox">Auto on run</label></div>
+          <div class="mb-translation-row mb-enhancer-row"><button class="mb-enhance-all" type="button" title="Generate improved text for every filled field with the CLIP encoder connected to this node">Generate all</button><button class="mb-enhancer-settings" type="button" title="Edit shared text generation settings" aria-label="Text generation settings">⚙</button><span class="mb-translation-status" aria-live="polite">Prompt ready</span></div>
+          <div class="mb-field-head"><label title="Describe the complete image: scene, composition, lighting, style, and visual relationships.">Summary <span class="mb-info" tabindex="0" data-help="Describe the whole image in natural language: scene, composition, lighting, style, and how the elements relate. Keep box-specific appearance in each box description.">i</span></label><div class="mb-field-actions"><button class="mb-enhance-field" data-enhance-target="summary" type="button" title="Generate improved text for only the summary field">Generate</button></div></div>
           <textarea class="mb-summary" placeholder="Describe the whole image: scene, composition, lighting, and style…" title="Global description of the whole image"></textarea>
-          <label title="Optional comma-separated medium or genre tags supported by MOSS-Image.">Summary metadata <span class="mb-info" tabindex="0" data-help="Optional MOSS-Image summary tags such as 'editorial photography, product campaign'. This becomes summary.meta in the JSON. Leave blank if you do not need tags.">i</span></label>
+          <div class="mb-field-head"><label title="Optional comma-separated medium or genre tags supported by MOSS-Image.">Summary metadata <span class="mb-info" tabindex="0" data-help="Optional MOSS-Image summary tags such as 'editorial photography, product campaign'. This becomes summary.meta in the JSON. Leave blank if you do not need tags.">i</span></label><div class="mb-field-actions"><button class="mb-enhance-field" data-enhance-target="meta" type="button" title="Generate improved tags for only the summary metadata">Generate</button></div></div>
           <textarea class="mb-meta" placeholder="Optional tags, e.g. editorial photography, product campaign" title="Optional medium or genre tags, separated by commas"></textarea>
           <label title="Optional MOSS summary.canvas hint. It is not required; it can suggest a single image, multi-panel layout, or collage.">Composition layout</label>
           <select class="mb-canvas-type" title="Optional MOSS summary.canvas hint; leave unspecified unless the composition structure matters"><option value="">Not specified</option><option value="single">Single image</option><option value="multi_panel">Multi-panel</option><option value="collage">Collage</option></select>
@@ -299,7 +359,8 @@ app.registerExtension({
       .mb-swap{width:31px;height:31px;padding:5px;flex:0 0 31px;background:#1b2022;border:1px solid var(--line);border-radius:7px;color:#c0c9cb;cursor:pointer}.mb-swap:hover{color:var(--accent);border-color:rgba(158,175,180,.45)}.mb-swap svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:1.65;stroke-linecap:round;stroke-linejoin:round}
       .mb-size-row{display:flex;align-items:center;gap:6px;min-height:30px}.mb-size-group{display:flex;align-items:center;gap:6px;flex:1;min-width:0}.mb-size-group label{flex:0 0 auto}.mb-size-group input{flex:1;width:auto;min-width:42px}.mb-size-group span,.mb-mp-row>span{color:var(--muted)}.mb-bg-controls{display:flex;align-items:center;gap:4px;flex:0 0 auto}.mb-bg-opacity{width:74px;height:16px;padding:0!important;accent-color:#9eafb4}.mb-bg-opacity-label{width:31px;text-align:right;color:var(--muted);font-size:10px}.mb-bg-eye{display:grid;place-items:center;width:27px;height:27px;padding:4px;background:#1b2022;border:1px solid var(--line);border-radius:6px;color:#c0c9cb;cursor:pointer}.mb-bg-eye:hover{color:var(--accent);border-color:rgba(158,175,180,.45)}.mb-bg-eye svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}.mb-eye-slash{display:none}.mb-bg-eye.is-hidden .mb-eye-shape{opacity:.45}.mb-bg-eye.is-hidden .mb-eye-slash{display:block}.mb-mp-row select{flex:1;min-width:0}.mb-mp-row input{width:68px}.mb-clear-all{flex:0 0 auto;background:#1d2325;color:#cbd4d7;border:1px solid var(--line);border-radius:6px;padding:5px 7px;cursor:pointer;font:inherit}.mb-clear-all:hover{border-color:rgba(158,175,180,.45);color:#fff}
       .mb-main{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(170px,1fr);gap:9px;min-height:300px;align-items:start}.mb-canvas-wrap{position:relative;min-width:0;width:100%;aspect-ratio:1/1;align-self:start;min-height:0;border:1px solid var(--line);border-radius:7px;background:#0e1214;overflow:hidden;display:grid;place-items:center}.mb-canvas{display:block;width:100%;height:100%;aspect-ratio:1/1;max-height:none;object-fit:fill;touch-action:none;cursor:crosshair}.mb-empty{position:absolute;pointer-events:none;opacity:.35;color:#b9c2c4;font-size:11px}.mb-prompt{display:flex;flex-direction:column;gap:5px;min-width:0}.mb-prompt textarea{width:100%;resize:vertical}.mb-summary{flex:1;min-height:130px}.mb-meta{min-height:60px}.mb-info{display:inline-grid;place-items:center;border:1px solid rgba(255,255,255,.25);border-radius:50%;width:14px;height:14px;font:italic 11px Georgia;color:#a5afb2;cursor:help}.mb-preview-note{font-size:10px;color:#899498;margin-top:auto}.mb-advanced{display:flex;flex-direction:column;gap:5px}.mb-state-toggle{align-self:flex-start;background:none;border:0;color:#8f999c;font:10px inherit;cursor:pointer;padding:2px}.mb-state{display:none;width:100%;height:70px;resize:vertical;font:10px monospace!important}.mb-state.open{display:block}
-      .mb-modal-shade{position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.52);display:grid;place-items:center}.mb-modal{position:relative;width:min(420px,calc(100vw - 28px));max-height:calc(100vh - 28px);overflow:auto;background:#14191b;border:1px solid rgba(255,255,255,.12);border-radius:10px;box-shadow:0 14px 44px #0009;padding:14px;color:#d3d8da;font:12px/1.45 "Segoe UI",system-ui,sans-serif}.mb-modal h3{margin:0 30px 9px 0;font-size:14px;font-weight:600}.mb-modal label{display:block;color:#b5bec1;margin:10px 0 4px}.mb-modal select,.mb-modal input,.mb-modal textarea{width:100%;background:#1b2022;color:#d3d8da;border:1px solid rgba(255,255,255,.12);border-radius:6px;padding:7px;font:inherit}.mb-modal textarea{min-height:70px;resize:vertical}.mb-modal .mb-exact{min-height:56px}.mb-modal .mb-modal-help{color:#8e999c;font-size:10px;margin-top:4px}.mb-modal .mb-modal-buttons{display:flex;justify-content:space-between;gap:7px;margin-top:13px}.mb-modal button{background:#202629;color:#cbd4d7;border:1px solid var(--line);border-radius:6px;padding:6px 10px;cursor:pointer}.mb-modal button.primary{background:linear-gradient(#b2c0c4,#7e9096);color:#111719;border:0;font-weight:600}.mb-modal button.danger{color:#df9696}.mb-modal .mb-modal-close{position:absolute;right:8px;top:7px;width:23px;height:23px;padding:0;display:grid;place-items:center;font-size:19px;line-height:1;background:#242a2c;border:1px solid var(--line);border-radius:5px}
+      .mb-modal-shade{position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.52);display:grid;place-items:center}.mb-modal{position:relative;width:min(420px,calc(100vw - 28px));max-height:calc(100vh - 28px);overflow:auto;background:#14191b;border:1px solid rgba(255,255,255,.12);border-radius:10px;box-shadow:0 14px 44px #0009;padding:14px;color:#d3d8da;font:12px/1.45 "Segoe UI",system-ui,sans-serif}.mb-modal h3{margin:0 30px 9px 0;font-size:14px;font-weight:600}.mb-modal label{display:block;color:#b5bec1;margin:10px 0 4px}.mb-modal select,.mb-modal input,.mb-modal textarea{width:100%;background:#1b2022;color:#d3d8da;border:1px solid rgba(255,255,255,.12);border-radius:6px;padding:7px;font:inherit}.mb-modal textarea{min-height:70px;resize:vertical}.mb-modal .mb-exact{min-height:56px}.mb-modal .mb-modal-help{color:#8e999c;font-size:10px;margin-top:4px}.mb-modal .mb-modal-buttons{display:flex;justify-content:space-between;gap:7px;margin-top:13px}.mb-modal button{background:#202629;color:#cbd4d7;border:1px solid var(--line);border-radius:6px;padding:6px 10px;cursor:pointer}.mb-modal button.primary{background:linear-gradient(#b2c0c4,#7e9096);color:#111719;border:0;font-weight:600}.mb-modal button.danger{color:#df9696}.mb-modal .mb-modal-close{position:absolute;right:8px;top:7px;width:23px;height:23px;padding:0;display:grid;place-items:center;font-size:19px;line-height:1;background:#242a2c;border:1px solid var(--line);border-radius:5px}.mb-modal .mb-field-actions .mb-enhance-field,.mb-modal .mb-field-actions .mb-enhancer-settings{width:auto;padding:3px 6px;font-size:10px}.mb-modal .mb-field-actions .mb-enhancer-settings{width:24px;padding:3px}
+      .mb-translation-modal .mb-translation-advanced{margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,.08)}.mb-translation-modal .mb-translation-advanced>summary{color:#b5bec1;cursor:pointer}.mb-translation-modal .mb-translation-advanced label:has(.mb-keep-loaded){display:flex;align-items:center;gap:8px}.mb-translation-modal .mb-keep-loaded{width:auto;margin:0}.mb-translation-modal .mb-translation-message{margin-top:10px;color:#8e999c;font-size:10px}.mb-translation-modal .mb-translation-run:disabled{opacity:.55;cursor:wait}
       .mb-help-pop{position:fixed;z-index:100000;max-width:260px;padding:8px 10px;background:#252b2f;border:1px solid rgba(255,255,255,.13);border-radius:7px;color:#d3d8da;font:11px/1.45 "Segoe UI",system-ui,sans-serif;box-shadow:0 6px 20px #0008;pointer-events:none}
       .mb-prompt{max-height:460px;overflow:auto;padding-right:3px}.mb-palette-tools{display:flex;align-items:center;gap:6px}.mb-palette-tools button{background:#1d2325;color:#cbd4d7;border:1px solid var(--line);border-radius:6px;padding:5px 8px;cursor:pointer;font:inherit}.mb-palette-list{display:flex;flex-wrap:wrap;gap:4px}.mb-color-chip{display:inline-flex;align-items:center;gap:3px}.mb-color-chip input[type=color]{padding:2px;width:22px;height:20px;cursor:pointer}.mb-color-chip button{border:0;background:transparent;color:#b5bec1;cursor:pointer;padding:0 3px}.mb-elements{display:flex;flex-direction:column;gap:4px;max-height:120px;overflow:auto}.mb-element{border:1px solid var(--line);background:#1d2325;color:#cbd4d7;border-radius:5px;padding:5px 7px;text-align:left;cursor:pointer;font:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mb-element.selected{border-color:var(--accent);color:#fff}
       .mb-color-popover{position:fixed;z-index:100001;width:250px;padding:12px;background:#171d1f;border:1px solid rgba(255,255,255,.18);border-radius:8px;box-shadow:0 8px 28px #000a;color:#d4dadd;font:12px/1.4 "Segoe UI",system-ui,sans-serif;display:grid;grid-template-columns:1fr;gap:8px;align-items:center}.mb-color-popover label{margin:0;color:#b5bec1;padding-right:24px}.mb-picker-plane{position:relative;width:100%;height:118px;border:1px solid #ffffff35;border-radius:5px;background-image:linear-gradient(to top,#000,transparent),linear-gradient(to right,#fff,transparent);cursor:crosshair;touch-action:none}.mb-picker-handle{position:absolute;width:12px;height:12px;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 4px #000;transform:translate(-50%,-50%);pointer-events:none}.mb-picker-hue-row{display:flex;align-items:center;gap:8px;color:#aeb8bb;font-size:10px}.mb-picker-hue{width:100%;height:13px;margin:0;padding:0!important;appearance:none;border:0!important;border-radius:8px;background:linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)!important}.mb-picker-hue::-webkit-slider-thumb{appearance:none;width:13px;height:13px;border:2px solid #fff;border-radius:50%;background:#272c2e}.mb-picker-value-row{display:grid;grid-template-columns:24px minmax(0,1fr) auto;gap:7px;align-items:center}.mb-picker-preview{width:24px;height:24px;border:1px solid #ffffff50;border-radius:5px}.mb-color-popover .mb-picker-hex{width:100%;height:30px;padding:5px 7px;background:#202629;border:1px solid var(--line);border-radius:5px;color:#e2e8e9;font:11px monospace}.mb-color-popover button{background:#252c2e;color:#d1d7d9;border:1px solid var(--line);border-radius:5px;padding:5px 8px;cursor:pointer;font:inherit}.mb-color-popover .mb-pop-close{position:absolute;right:5px;top:5px;width:20px;height:20px;padding:0;font-size:17px;line-height:1}.mb-recent-colors{display:grid;grid-template-columns:repeat(10,minmax(0,1fr));gap:4px}.mb-color-popover .mb-recent-swatch{width:100%;height:18px;min-width:0;padding:0;border-radius:4px;border:1px solid #ffffff45}.mb-color-popover .mb-recent-swatch.is-empty{background:#242a2c;opacity:.4;cursor:default}.mb-elements{display:flex;flex-direction:column;gap:4px;max-height:120px;overflow:auto}.mb-element{border:1px solid var(--line);background:#1d2325;color:#cbd4d7;border-radius:5px;padding:5px 7px;text-align:left;cursor:pointer;font:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mb-element.selected{border-color:var(--accent);color:#fff}
@@ -309,11 +370,13 @@ app.registerExtension({
       .mb-head,.mb-size-row{flex:0 0 auto}
       .mb-main{grid-template-columns:minmax(0,1.65fr) minmax(0,1fr);grid-template-rows:minmax(0,1fr);flex:1 1 0;min-height:0;align-items:stretch;overflow:hidden}
       .mb-canvas-wrap{display:block;height:100%;min-height:0;aspect-ratio:auto;align-self:stretch}
-      .mb-canvas{position:absolute;inset:0;width:100%;height:100%;max-width:none;max-height:none;aspect-ratio:auto;object-fit:fill}
+      .mb-canvas{position:absolute;inset:0;margin:auto;width:auto;height:auto;max-width:100%;max-height:100%;aspect-ratio:1/1;object-fit:fill}
       .mb-prompt{height:100%;max-height:none;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;align-self:stretch;scrollbar-gutter:stable}
       .mb-summary{flex:0 0 250px;min-height:90px}
       .mb-meta{min-height:48px}
       .mb-preview-note{margin-top:4px}
+      .mb-translation-row{display:flex;align-items:center;gap:5px;flex:0 0 auto;margin:2px 0}.mb-translation-row button{background:#1d2325;color:#cbd4d7;border:1px solid var(--line);border-radius:5px;padding:4px 7px;cursor:pointer;font:inherit}.mb-translation-row button:hover:not(:disabled){border-color:rgba(158,175,180,.55);color:#fff}.mb-translation-row button:disabled{opacity:.45;cursor:default}.mb-auto-translate-label{display:flex;align-items:center;gap:3px;white-space:nowrap;cursor:pointer}.mb-auto-translate{width:13px!important;height:13px;padding:0!important;margin:0;accent-color:#9eafb4}.mb-translation-status{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:10px}
+      .mb-field-head{display:flex;align-items:center;justify-content:space-between;gap:6px;min-width:0}.mb-field-head>label{margin:0}.mb-field-actions{display:flex;align-items:center;gap:3px;flex:0 0 auto}.moss-board .mb-enhance-field{flex:0 0 auto;padding:2px 6px;background:#1d2325;color:#bfcacd;border:1px solid var(--line);border-radius:4px;font:inherit;font-size:10px;line-height:1.4;cursor:pointer}.moss-board .mb-enhance-field:hover:not(:disabled){color:#fff;border-color:rgba(158,175,180,.6)}.moss-board .mb-enhance-field:disabled{opacity:.45;cursor:wait}.mb-enhancer-modal{width:min(500px,calc(100vw - 28px))}.mb-enhancer-modal .mb-enhancer-advanced{margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,.08)}.mb-enhancer-modal .mb-enhancer-advanced>summary{color:#b5bec1;cursor:pointer}.mb-enhancer-modal .mb-enhancer-message{margin-top:8px;color:#8e999c;font-size:10px}.mb-enhancer-modal .mb-enhancer-prompt{min-height:110px}.mb-enhancer-modal .mb-enhancer-check{display:flex;align-items:center;gap:8px}.mb-enhancer-modal .mb-enhancer-check input{width:auto;margin:0}
       .mb-advanced{flex:0 0 auto;margin-top:4px}
       .mb-elements{flex:0 0 auto;min-height:0;max-height:130px;overflow-y:auto;overflow-x:hidden}
       .mb-element{flex:0 0 30px;height:30px;min-height:30px;line-height:18px;white-space:nowrap}
@@ -355,7 +418,7 @@ app.registerExtension({
           try {
             const saved = JSON.parse(getValue(node, "editor_state", "{}") || "{}");
             saved.coordinateSpace = "workspace";
-            saved.workspaceAspect = rect.width / rect.height;
+            saved.workspaceAspect = 1;
             const value = JSON.stringify(saved);
             setValue(node, "editor_state", value);
             const advanced = root.querySelector(".mb-state");
@@ -380,10 +443,13 @@ app.registerExtension({
     const canvas = $(".mb-canvas"), ctx = canvas.getContext("2d");
     canvas.title = "Drag to draw a box. Click to select it. Hold Alt and click to cycle through overlapping boxes. Double-click to edit.";
     const ratioSelect = $(".mb-ratio"), wInput = $(".mb-width"), hInput = $(".mb-height");
-    const mpSelect = $(".mb-mp-select"), mpInput = $(".mb-mp"), summary = $(".mb-summary"), meta = $(".mb-meta"), canvasType = $(".mb-canvas-type");
+    const mpSelect = $(".mb-mp-select"), mpInput = $(".mb-mp"), summary = $(".mb-summary"), meta = $(".mb-meta"), canvasType = $(".mb-canvas-type"), autoTranslateToggle = $(".mb-auto-translate");
     const opacitySlider = $(".mb-bg-opacity"), opacityLabel = $(".mb-bg-opacity-label"), eyeButton = $(".mb-bg-eye");
     const savedState = $(".mb-state"), stateToggle = $(".mb-state-toggle"), emptyHint = $(".mb-empty");
     let state = readState(node), selected = -1, gesture = null, latestPreview = null, showHelp = null, sampleMode = null, previewRect = null;
+    let sourceSummary = getValue(node, "summary", ""), sourceMeta = getValue(node, "summary_meta", "");
+    let translationBusy = false, enhancerBusy = false, autoTranslate = state.autoTranslate === true;
+    autoTranslateToggle.checked = autoTranslate;
     let landscapeOrientation = state.orientation ? state.orientation === "landscape" : Boolean(getValue(node, "portrait", false));
     const boxUiColors = new WeakMap();
     let altPickCycle = null;
@@ -410,35 +476,290 @@ app.registerExtension({
       const quantum = 16, units = Number(value) / quantum;
       return Math.max(64, (roundDown ? Math.floor(units) : Math.floor(units + .5)) * quantum);
     }
+    function fitDimensions(ratio, megapixels, roundDown = false) {
+      const quantum = 16, area = Math.max(4096, Number(megapixels) * 1e6), r = Math.max(1e-9, Number(ratio));
+      const idealWidth = Math.sqrt(area * r), idealHeight = Math.sqrt(area / r);
+      const centerWidth = idealWidth / quantum, centerHeight = idealHeight / quantum, maxUnits = 65536 / quantum;
+      const firstWidth = Math.max(4, Math.floor(centerWidth) - 8), lastWidth = Math.min(maxUnits, Math.ceil(centerWidth) + 8);
+      let best = null;
+      for (let widthUnit = firstWidth; widthUnit <= lastWidth; widthUnit++) {
+        const width = widthUnit * quantum, heightUnits = new Set();
+        for (const center of [widthUnit / r, area / (quantum * quantum * widthUnit), centerHeight]) {
+          const firstHeight = Math.max(4, Math.floor(center) - 3), lastHeight = Math.min(maxUnits, Math.ceil(center) + 3);
+          for (let heightUnit = firstHeight; heightUnit <= lastHeight; heightUnit++) heightUnits.add(heightUnit);
+        }
+        for (const heightUnit of heightUnits) {
+          const height = heightUnit * quantum, candidateArea = width * height;
+          if (roundDown && candidateArea > area) continue;
+          const ratioError = Math.abs((width / height) / r - 1), areaError = Math.abs(candidateArea / area - 1);
+          const candidate = { score: areaError + 2 * ratioError, ratioError, areaError, area: candidateArea, width, height };
+          if (!best || candidate.score < best.score ||
+            (candidate.score === best.score && (candidate.ratioError < best.ratioError ||
+              (candidate.ratioError === best.ratioError && candidate.areaError < best.areaError)))) best = candidate;
+        }
+      }
+      if (best) return [best.width, best.height];
+      return [roundDimension(idealWidth, true), roundDimension(idealHeight, true)];
+    }
     function calculatedSize() {
       const r = ratioSelect.value === "Custom"
         ? (Number(wInput.value) || 1024) / Math.max(1, Number(hInput.value) || 1024)
         : ratioValue();
       const mp = mpSelect.value === "Custom" ? Math.max(.25, Number(mpInput.value) || 1) : parseFloat(mpSelect.value);
-      const width = Math.sqrt(mp * 1e6 * r);
       const fitImageMegapixels = linkedInput(node, "background_resize");
-      return [roundDimension(width, fitImageMegapixels), roundDimension(width / r, fitImageMegapixels)];
+      return fitDimensions(r, mp, fitImageMegapixels);
+    }
+    function sourceMetaParts(value = sourceMeta) { return String(value || "").split(",").map((part) => part.trim()).filter(Boolean); }
+    function buildTranslationSegments() {
+      const segments = [];
+      if (String(sourceSummary || "").trim()) segments.push({ id: "summary.caption", text: String(sourceSummary).trim() });
+      sourceMetaParts().forEach((text, index) => segments.push({ id: "summary.meta." + index, text }));
+      (Array.isArray(state.items) ? state.items : []).forEach((item, stateIndex) => {
+        if (!item || typeof item !== "object") return;
+        for (const field of ["caption", "text"]) if (typeof item[field] === "string" && item[field].trim()) segments.push({ id: "item." + stateIndex + "." + field, text: field === "caption" ? item[field].trim() : item[field] });
+        (Array.isArray(item.tags) ? item.tags : []).forEach((text, tagIndex) => { if (typeof text === "string" && text.trim()) segments.push({ id: "item." + stateIndex + ".tags." + tagIndex, text }); });
+      });
+      return segments;
+    }
+    function translationSettings(settings = {}) {
+      return {
+        source_language: settings.source_language || "Auto Detect",
+        target_language: settings.target_language || "English",
+        model_size: settings.model_size || "4B",
+        device: settings.device || "default",
+        prompt_mode: settings.prompt_mode || "auto",
+        max_new_tokens: Math.trunc(Math.max(0, Math.min(8192, Number(settings.max_new_tokens) || 0))),
+        max_input_tokens: Math.trunc(Math.max(0, Math.min(8192, Number(settings.max_input_tokens) || 0))),
+        quantization: ["none", "bnb-8bit", "bnb-4bit"].includes(settings.quantization) ? settings.quantization : "none",
+        keep_model_loaded: settings.keep_model_loaded !== false,
+      };
+    }
+    function translationSourceKey(segments, settings) {
+      const normalized = translationSettings(settings);
+      const payload = JSON.stringify({ segments: segments.filter((entry) => entry.text.trim()), settings: {
+        device: normalized.device, max_input_tokens: normalized.max_input_tokens,
+        max_new_tokens: normalized.max_new_tokens, model_size: normalized.model_size,
+        prompt_mode: normalized.prompt_mode, quantization: normalized.quantization,
+        source_language: normalized.source_language, target_language: normalized.target_language,
+      }});
+      let hash = 0xcbf29ce484222325n;
+      const prime = 0x100000001b3n, mask = 0xffffffffffffffffn;
+      for (let i = 0; i < payload.length; i++) {
+        const unit = payload.charCodeAt(i);
+        hash = ((hash ^ BigInt(unit & 255)) * prime) & mask;
+        hash = ((hash ^ BigInt(unit >>> 8)) * prime) & mask;
+      }
+      return hash.toString(16).padStart(16, "0");
+    }
+    function enhancerSettings(settings = {}) {
+      const numberOr = (key, fallback) => settings[key] !== undefined && settings[key] !== "" && Number.isFinite(Number(settings[key])) ? Number(settings[key]) : fallback;
+      return {
+        max_length: Math.trunc(Math.max(16, Math.min(32768, numberOr("max_length", 2048)))),
+        thinking: settings.thinking === true,
+        use_default_template: settings.use_default_template !== false,
+        temperature: Math.max(0.01, Math.min(2, numberOr("temperature", 0.7))),
+        top_k: Math.trunc(Math.max(0, Math.min(1000, numberOr("top_k", 20)))),
+        top_p: Math.max(0, Math.min(1, numberOr("top_p", 0.8))),
+        min_p: Math.max(0, Math.min(1, numberOr("min_p", 0))),
+        repetition_penalty: Math.max(0, Math.min(5, numberOr("repetition_penalty", 1))),
+        presence_penalty: Math.max(0, Math.min(5, numberOr("presence_penalty", 0))),
+        seed: Math.trunc(Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, numberOr("seed", 0)))),
+        sampling_mode: settings.sampling_mode === "off" ? "off" : "on",
+        mtp: settings.mtp || "auto",
+        system_prompt: String(settings.system_prompt || ""),
+      };
+    }
+    function enhancerUrl(path) {
+      const route = `/moss_layout_ydr/prompt-enhancer/${path}`;
+      return typeof app.api?.apiURL === "function" ? app.api.apiURL(route) : route;
+    }
+    function enhancerOptionsUrl() {
+      return `${enhancerUrl("options")}?node_id=${encodeURIComponent(node.id)}`;
+    }
+    function gatherEnhanceAllFields() {
+      const fields = [];
+      const add = (id, type, text, current, apply) => {
+        if (typeof text === "string" && text.trim()) fields.push({ id, type, text, current, apply });
+      };
+      add("summary.caption", "whole-image summary", summary.value, () => summary.value, (value) => { summary.value = value; });
+      add("summary.meta", "summary metadata tags", meta.value, () => meta.value, (value) => { meta.value = value; });
+      state.items.forEach((item, index) => {
+        if (!item || typeof item !== "object") return;
+        for (const field of ["caption", "text"]) {
+          add(`item.${index}.${field}`, field === "caption" ? `${TYPE_NAME[item.label] || "Object"} description` : "exact visible text", item[field], () => state.items.includes(item) ? item[field] : null, (value) => { item[field] = value; });
+        }
+        if (Array.isArray(item.tags)) {
+          const tags = item.tags.join(", ");
+          add(`item.${index}.tags`, "box tags", tags, () => state.items.includes(item) && Array.isArray(item.tags) ? item.tags.join(", ") : null, (value) => { item.tags = value.split(",").map((tag) => tag.trim()).filter(Boolean); });
+        }
+      });
+      return fields;
+    }
+    async function enhanceFields(fields, button = null) {
+      if (enhancerBusy || translationBusy) return;
+      const filled = fields.filter((field) => typeof field.text === "string" && field.text.trim());
+      if (!filled.length) { $(".mb-translation-status").textContent = "Add text to a field before generating"; return; }
+      const settings = enhancerSettings(state.promptEnhancerSettings || {});
+      state.promptEnhancerSettings = settings;
+      syncWidgets();
+      const buttons = [...root.querySelectorAll(".mb-enhance-all, .mb-enhance-field, .mb-enhancer-settings")];
+      buttons.forEach((entry) => { entry.disabled = true; });
+      if (button) button.disabled = true;
+      enhancerBusy = true;
+      refreshTranslationStatus();
+      $(".mb-translation-status").textContent = filled.length === 1 ? "Generating for one field…" : `Generating for ${filled.length} fields…`;
+      try {
+        const clipResponse = await fetch(enhancerOptionsUrl(), { credentials: "same-origin" });
+        const clipStatus = await clipResponse.json();
+        if (!clipResponse.ok) throw new Error(clipStatus.error || "Could not check the connected CLIP input.");
+        if (!clipStatus.clip_available) throw new Error("Connect a CLIP encoder to this node and run the workflow once before generating text.");
+        const response = await fetch(enhancerUrl("run"), {
+          method: "POST", credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ node_id: String(node.id), segments: filled.map(({ id, type, text }) => ({ id, type, text })), settings }),
+        });
+        const result = await response.json();
+        if (!response.ok || result.status !== "ready") throw new Error(result.error || "Text enhancement failed.");
+        state.promptEnhancerSettings = enhancerSettings(result.settings || settings);
+        let applied = 0, skipped = 0;
+        for (const field of filled) {
+          const value = result.values?.[field.id];
+          if (typeof value !== "string" || !value.trim()) continue;
+          if (field.current() !== field.text) { skipped++; continue; }
+          field.apply(value);
+          applied++;
+        }
+        if (linkedInput(node, "layout_text") && state.lastLayoutInputHash) {
+          state.suppressLayoutInput = true;
+          state.suppressLayoutHash = state.lastLayoutInputHash;
+        }
+        sourceSummary = summary.value;
+        sourceMeta = meta.value;
+        syncWidgets();
+        renderSidebar();
+        draw();
+        $(".mb-translation-status").textContent = skipped ? `Generated ${applied}; skipped ${skipped} changed field(s)` : `Generated text for ${applied} field${applied === 1 ? "" : "s"}`;
+      } catch (error) {
+        $(".mb-translation-status").textContent = error.message || String(error);
+      } finally {
+        enhancerBusy = false;
+        buttons.forEach((entry) => { entry.disabled = false; });
+        if (button) button.disabled = false;
+      }
+    }
+    async function openEnhancerSettings() {
+      if (enhancerBusy || translationBusy) return;
+      const shade = document.createElement("div"); shade.className = "mb-modal-shade mb-enhancer-shade";
+      const dialog = document.createElement("div"); dialog.className = "mb-modal mb-enhancer-modal"; dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true");
+      dialog.innerHTML = `<h3>Text generation settings</h3><div class="mb-enhancer-clip-status" role="status">Checking the connected CLIP input…</div><div class="mb-enhancer-message">All Generate buttons share one settings profile and the CLIP input connected to this node. Run this while the ComfyUI workflow queue is idle.</div><details class="mb-enhancer-advanced"><summary>Generation settings</summary><label>Sampling mode</label><select class="mb-enhancer-sampling"><option value="on">On</option><option value="off">Off</option></select><label>Maximum output tokens</label><input class="mb-enhancer-max" type="number" min="16" max="32768" step="64"><label>Temperature</label><input class="mb-enhancer-temperature" type="number" min="0.01" max="2" step="0.05"><label>Top K</label><input class="mb-enhancer-top-k" type="number" min="0" max="1000" step="1"><label>Top P</label><input class="mb-enhancer-top-p" type="number" min="0" max="1" step="0.01"><label>Min P</label><input class="mb-enhancer-min-p" type="number" min="0" max="1" step="0.01"><label>Repetition penalty</label><input class="mb-enhancer-repetition" type="number" min="0" max="5" step="0.05"><label>Presence penalty</label><input class="mb-enhancer-presence" type="number" min="0" max="5" step="0.05"><label>Seed</label><input class="mb-enhancer-seed" type="number" min="0" step="1"><label>MTP</label><select class="mb-enhancer-mtp"><option>auto</option><option>off</option><option>2</option><option>3</option><option>4</option><option>5</option><option>tree2s1</option><option>tree2s2</option><option>tree3s1</option><option>tree4s1m8</option></select><label class="mb-enhancer-check"><input class="mb-enhancer-thinking" type="checkbox">Enable thinking mode</label><label class="mb-enhancer-check"><input class="mb-enhancer-template" type="checkbox" checked>Use the model's default chat template</label><label>System prompt</label><textarea class="mb-enhancer-prompt"></textarea></details><div class="mb-modal-message mb-enhancer-error" aria-live="polite"></div><div class="mb-modal-buttons"><button class="mb-enhancer-cancel">Cancel</button><span></span><button class="primary mb-enhancer-save">Save settings</button></div>`;
+      shade.append(dialog); document.body.append(shade);
+      const closeButton = document.createElement("button"); closeButton.type = "button"; closeButton.className = "mb-modal-close"; closeButton.title = "Close"; closeButton.setAttribute("aria-label", "Close"); closeButton.textContent = "×"; dialog.insertBefore(closeButton, dialog.firstChild);
+      const close = () => shade.remove();
+      closeButton.onclick = dialog.querySelector(".mb-enhancer-cancel").onclick = close;
+      shade.addEventListener("pointerdown", (event) => { if (event.target === shade) close(); });
+      shade.addEventListener("keydown", (event) => { if (event.key === "Escape") close(); });
+      const previous = enhancerSettings(state.promptEnhancerSettings || {});
+      const promptField = dialog.querySelector(".mb-enhancer-prompt");
+      promptField.value = previous.system_prompt;
+      dialog.querySelector(".mb-enhancer-max").value = previous.max_length;
+      dialog.querySelector(".mb-enhancer-temperature").value = previous.temperature;
+      dialog.querySelector(".mb-enhancer-top-k").value = previous.top_k;
+      dialog.querySelector(".mb-enhancer-top-p").value = previous.top_p;
+      dialog.querySelector(".mb-enhancer-min-p").value = previous.min_p;
+      dialog.querySelector(".mb-enhancer-repetition").value = previous.repetition_penalty;
+      dialog.querySelector(".mb-enhancer-presence").value = previous.presence_penalty;
+      dialog.querySelector(".mb-enhancer-seed").value = previous.seed;
+      dialog.querySelector(".mb-enhancer-sampling").value = previous.sampling_mode;
+      dialog.querySelector(".mb-enhancer-mtp").value = previous.mtp;
+      dialog.querySelector(".mb-enhancer-thinking").checked = previous.thinking;
+      dialog.querySelector(".mb-enhancer-template").checked = previous.use_default_template;
+      try {
+        const response = await fetch(enhancerOptionsUrl(), { credentials: "same-origin" });
+        const options = await response.json();
+        if (!response.ok) throw new Error(options.error || "Could not check the connected CLIP input.");
+        dialog.querySelector(".mb-enhancer-clip-status").textContent = options.clip_available
+          ? `Connected CLIP: ${options.clip_name}`
+          : "No CLIP encoder is available yet. Connect CLIP to this node, then run the workflow once.";
+        if (!promptField.value && options.default_system_prompt) promptField.value = options.default_system_prompt;
+      } catch (error) {
+        dialog.querySelector(".mb-enhancer-error").textContent = error.message || String(error);
+      }
+      dialog.querySelector(".mb-enhancer-save").onclick = () => {
+        state.promptEnhancerSettings = enhancerSettings({
+          max_length: dialog.querySelector(".mb-enhancer-max").value,
+          temperature: dialog.querySelector(".mb-enhancer-temperature").value,
+          top_k: dialog.querySelector(".mb-enhancer-top-k").value,
+          top_p: dialog.querySelector(".mb-enhancer-top-p").value,
+          min_p: dialog.querySelector(".mb-enhancer-min-p").value,
+          repetition_penalty: dialog.querySelector(".mb-enhancer-repetition").value,
+          presence_penalty: dialog.querySelector(".mb-enhancer-presence").value,
+          seed: dialog.querySelector(".mb-enhancer-seed").value,
+          sampling_mode: dialog.querySelector(".mb-enhancer-sampling").value,
+          mtp: dialog.querySelector(".mb-enhancer-mtp").value,
+          thinking: dialog.querySelector(".mb-enhancer-thinking").checked,
+          use_default_template: dialog.querySelector(".mb-enhancer-template").checked,
+          system_prompt: promptField.value,
+        });
+        syncWidgets();
+        close();
+      };
+    }
+    function replacePromptText(values) {
+      if (typeof values?.["summary.caption"] === "string") summary.value = values["summary.caption"];
+      const metaParts = sourceMetaParts();
+      meta.value = metaParts.map((entry, index) => values?.[`summary.meta.${index}`] ?? entry).join(", ");
+      state.items.forEach((item, index) => {
+        if (!item || typeof item !== "object") return;
+        for (const field of ["caption", "text"]) {
+          const value = values?.[`item.${index}.${field}`];
+          if (typeof value !== "string") continue;
+          if (field === "text" && !value.trim()) delete item.text;
+          else item[field] = value;
+        }
+        if (Array.isArray(item.tags)) {
+          item.tags = item.tags.map((entry, tagIndex) => values?.[`item.${index}.tags.${tagIndex}`] ?? entry);
+        }
+      });
+      sourceSummary = summary.value;
+      sourceMeta = meta.value;
+      if (linkedInput(node, "layout_text") && state.lastLayoutInputHash) {
+        state.suppressLayoutInput = true;
+        state.suppressLayoutHash = state.lastLayoutInputHash;
+      }
+      syncWidgets();
+      renderSidebar();
+      draw();
+    }
+    function displayItems() { return state.items; }
+    function refreshTranslationStatus() {
+      $(".mb-translation-status").textContent = translationBusy ? "Translating…" : enhancerBusy ? "Enhancing text…" : autoTranslate ? "Auto-translate on run" : "Prompt ready";
     }
     function syncWidgets() {
+      sourceSummary = summary.value;
+      sourceMeta = meta.value;
+      delete state.translated;
+      delete state.translationView;
+      refreshTranslationStatus();
       setValue(node, "aspect_ratio", ratioSelect.value);
       setValue(node, "resolution", mpSelect.value);
       setValue(node, "width", roundDimension(wInput.value));
       setValue(node, "height", roundDimension(hInput.value));
       setValue(node, "megapixels", Math.max(.25, Number(mpInput.value) || 1));
       setValue(node, "dimension_multiple", "16");
-      setValue(node, "summary", summary.value);
-      setValue(node, "summary_meta", meta.value);
+      setValue(node, "summary", sourceSummary);
+      setValue(node, "summary_meta", sourceMeta);
       state.summaryPalette = summaryPalette;
       state.recentColors = recentColors.slice(0, 10);
       state.coordinateSpace = "workspace";
       state.orientation = landscapeOrientation ? "landscape" : "portrait";
-      const boardRect = canvas.getBoundingClientRect();
-      if (boardRect.width > 0 && boardRect.height > 0) state.workspaceAspect = boardRect.width / boardRect.height;
+      state.workspaceAspect = 1;
+      state.autoTranslate = autoTranslate;
       if (canvasType.value) state.summaryCanvas = canvasType.value;
       else delete state.summaryCanvas;
       state.backgroundOpacity = backgroundOpacity;
       state.backgroundVisible = backgroundVisible;
       setValue(node, "portrait", landscapeOrientation);
+      setValue(node, "prompt_enhancer_settings", JSON.stringify(state.promptEnhancerSettings || {}));
       savedState.value = JSON.stringify(state);
       setValue(node, "editor_state", savedState.value);
       node.setDirtyCanvas?.(true, true);
@@ -467,11 +788,8 @@ app.registerExtension({
     }
 
     function fieldRect() {
-      const r = ratioSelect.value === "Custom" ? (Number(wInput.value) || 1024) / Math.max(1, Number(hInput.value) || 1024) : ratioValue();
-      const bounds = canvas.getBoundingClientRect();
-      const workspaceWidth = bounds.width > 0 ? bounds.width : CW;
-      const workspaceHeight = bounds.height > 0 ? bounds.height : CH;
-      const workspaceAspect = workspaceWidth / workspaceHeight;
+      const r = Math.max(1e-9, (Number(wInput.value) || 1024) / Math.max(1, Number(hInput.value) || 1024));
+      const workspaceWidth = CW, workspaceHeight = CH, workspaceAspect = 1;
       const frameWidth = workspaceAspect >= r ? workspaceHeight * r : workspaceWidth;
       const frameHeight = frameWidth / r;
       const x = (workspaceWidth - frameWidth) / 2;
@@ -485,7 +803,7 @@ app.registerExtension({
     }
     function migrateItemsToWorkspace() {
       if (state.coordinateSpace === "workspace") return;
-      const aspect = ratioSelect.value === "Custom" ? (Number(wInput.value) || 1024) / Math.max(1, Number(hInput.value) || 1024) : ratioValue();
+      const aspect = Math.max(1e-9, (Number(wInput.value) || 1024) / Math.max(1, Number(hInput.value) || 1024));
       const width = aspect >= 1 ? 1 : aspect, height = aspect >= 1 ? 1 / aspect : 1;
       const left = (1 - width) / 2, top = (1 - height) / 2;
       state.items = state.items.map((item) => {
@@ -493,6 +811,34 @@ app.registerExtension({
         return { ...item, bbox: [left + box[0] * width, top + box[1] * height, left + box[2] * width, top + box[3] * height] };
       });
       state.coordinateSpace = "workspace";
+      state.workspaceAspect = 1;
+    }
+    function normalizedGenerationFrame(workspaceAspect, generationAspect) {
+      const frameWidth = workspaceAspect >= generationAspect ? generationAspect / workspaceAspect : 1;
+      const frameHeight = frameWidth / generationAspect;
+      return { x: (1 - frameWidth) / 2, y: (1 - frameHeight) / 2, w: frameWidth, h: frameHeight };
+    }
+    function migrateWorkspaceToSquare() {
+      if (state.coordinateSpace !== "workspace") return;
+      const oldAspect = Number(state.workspaceAspect);
+      if (!Number.isFinite(oldAspect) || oldAspect <= 0 || Math.abs(oldAspect - 1) < 0.0001) { state.workspaceAspect = 1; return; }
+      const generationAspect = Math.max(1e-9, (Number(wInput.value) || 1024) / Math.max(1, Number(hInput.value) || 1024));
+      const oldFrame = normalizedGenerationFrame(oldAspect, generationAspect), newFrame = normalizedGenerationFrame(1, generationAspect);
+      const remap = (items) => Array.isArray(items) ? items.map((item) => {
+        const box = item.bbox || [0,0,1,1];
+        return { ...item, bbox: [
+          newFrame.x + (box[0] - oldFrame.x) / oldFrame.w * newFrame.w,
+          newFrame.y + (box[1] - oldFrame.y) / oldFrame.h * newFrame.h,
+          newFrame.x + (box[2] - oldFrame.x) / oldFrame.w * newFrame.w,
+          newFrame.y + (box[3] - oldFrame.y) / oldFrame.h * newFrame.h,
+        ] };
+      }) : items;
+      state.items = remap(state.items);
+      state.workspaceAspect = 1;
+    }
+    function canvasContentRect() {
+      const rect = canvas.getBoundingClientRect();
+      return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
     }
     function generationBoxToWorkspace(box) {
       const frame = fieldRect();
@@ -503,7 +849,7 @@ app.registerExtension({
       return [box[0] * CW, box[1] * CH, box[2] * CW, box[3] * CH];
     }
     function canvasPoint(event) {
-      const cr = canvas.getBoundingClientRect();
+      const cr = canvasContentRect();
       const x = (event.clientX - cr.left) * CW / cr.width, y = (event.clientY - cr.top) * CH / cr.height;
       const frame = fieldRect();
       const inside = x >= frame.x && x <= frame.x + frame.w && y >= frame.y && y <= frame.y + frame.h;
@@ -527,10 +873,12 @@ app.registerExtension({
     }
     function paintPreview() {
       if (!latestPreview?.complete || !latestPreview.naturalWidth) return;
-      const r = fieldRect(), scale = Math.max(r.w / latestPreview.naturalWidth, r.h / latestPreview.naturalHeight);
+      const r = fieldRect(), scale = Math.min(r.w / latestPreview.naturalWidth, r.h / latestPreview.naturalHeight);
       const w = latestPreview.naturalWidth * scale, h = latestPreview.naturalHeight * scale;
       const x = r.x + (r.w - w) / 2, y = r.y + (r.h - h) / 2;
-      previewRect = { x: r.x, y: r.y, w: r.w, h: r.h, imageX: x, imageY: y, imageW: w, imageH: h };
+      const visibleX = Math.max(r.x, x), visibleY = Math.max(r.y, y);
+      const visibleRight = Math.min(r.x + r.w, x + w), visibleBottom = Math.min(r.y + r.h, y + h);
+      previewRect = { x: visibleX, y: visibleY, w: visibleRight - visibleX, h: visibleBottom - visibleY, imageX: x, imageY: y, imageW: w, imageH: h };
       if (!backgroundVisible || backgroundOpacity <= 0) return;
       ctx.save();
       ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
@@ -546,7 +894,7 @@ app.registerExtension({
       paintPreview();
       ctx.strokeStyle = "rgba(205,216,219,.46)"; ctx.lineWidth = 1.5; ctx.setLineDash([7, 6]); ctx.strokeRect(r.x, r.y, r.w, r.h); ctx.setLineDash([]);
       ctx.save(); ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
-      state.items.forEach((item, index) => {
+      displayItems().forEach((item, index) => {
         const [x1, y1, x2, y2] = boxPx(item.bbox || [0, 0, 1, 1]);
         const color = visualBoxColor(item);
         ctx.fillStyle = color; ctx.globalAlpha = .13; ctx.fillRect(x1, y1, x2 - x1, y2 - y1); ctx.globalAlpha = 1;
@@ -621,7 +969,84 @@ app.registerExtension({
     }
 
     function saveState() { savedState.value = JSON.stringify(state); syncWidgets(); draw(); }
-    function renderSidebar(){const list=$(".mb-elements");list.innerHTML="";state.items.forEach((item,i)=>{const b=document.createElement("button");b.type="button";b.className="mb-element"+(i===selected?" selected":"");b.textContent=`${TYPE_NAME[item.label]||"Object"} ${i+1}: ${item.caption||item.text||"(no description)"}`;b.onclick=()=>{selected=i;canvas.focus();draw();};b.ondblclick=()=>openEditor(i,innerWidth/2,innerHeight/2);list.append(b);});const pal=$(".mb-global-palette");pal.innerHTML="";summaryPalette.forEach((color,i)=>{const chip=document.createElement("span");chip.className="mb-color-chip";chip.innerHTML=`<input type="color" value="${/^#[0-9a-f]{6}$/i.test(color)?color:"#b4c0c5"}"><button type="button" title="Remove color">×</button>`;chip.querySelector("input").oninput=e=>{summaryPalette[i]=e.target.value;syncWidgets();};chip.querySelector("button").onclick=()=>{summaryPalette.splice(i,1);syncWidgets();draw();};pal.append(chip);});}
+    function renderSidebar(){const list=$(".mb-elements");list.innerHTML="";displayItems().forEach((item,i)=>{const b=document.createElement("button");b.type="button";b.className="mb-element"+(i===selected?" selected":"");b.textContent=`${TYPE_NAME[item.label]||"Object"} ${i+1}: ${item.caption||item.text||"(no description)"}`;b.onclick=()=>{selected=i;canvas.focus();draw();};b.ondblclick=()=>openEditor(i,innerWidth/2,innerHeight/2);list.append(b);});const pal=$(".mb-global-palette");pal.innerHTML="";summaryPalette.forEach((color,i)=>{const chip=document.createElement("span");chip.className="mb-color-chip";chip.innerHTML=`<input type="color" value="${/^#[0-9a-f]{6}$/i.test(color)?color:"#b4c0c5"}"><button type="button" title="Remove color">×</button>`;chip.querySelector("input").oninput=e=>{summaryPalette[i]=e.target.value;syncWidgets();};chip.querySelector("button").onclick=()=>{summaryPalette.splice(i,1);syncWidgets();draw();};pal.append(chip);});}
+    async function openTranslationDialog() {
+      if (translationBusy || enhancerBusy) return;
+      const segments = buildTranslationSegments();
+      if (!segments.length) { $(".mb-translation-status").textContent = "Add prompt text before translating"; return; }
+      const shade = document.createElement("div"); shade.className = "mb-modal-shade mb-translation-shade";
+      const dialog = document.createElement("div"); dialog.className = "mb-modal mb-translation-modal"; dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true");
+      dialog.innerHTML = `<h3>Translate and replace layout text</h3><label>Source language</label><select class="mb-source-language"><option>Auto Detect</option></select><label>Target language</label><select class="mb-target-language"></select><label>TranslateGemma model</label><select class="mb-model-size"><option>4B</option><option>12B</option><option>27B</option></select><details class="mb-translation-advanced"><summary>Advanced settings</summary><label>Device</label><select class="mb-device"><option value="default">Default</option><option value="cpu">CPU</option></select><label>Prompt mode</label><select class="mb-prompt-mode"><option value="auto">Auto</option><option value="structured">Structured</option><option value="plain">Plain</option></select><label>Quantization</label><select class="mb-quantization"><option value="none">None</option><option value="bnb-8bit">8-bit</option><option value="bnb-4bit">4-bit</option></select><label>Max input tokens (0 = automatic)</label><input class="mb-max-input" type="number" min="0" max="8192" value="0"><label>Max new tokens (0 = automatic)</label><input class="mb-max-new" type="number" min="0" max="8192" value="0"><label><input class="mb-keep-loaded" type="checkbox" checked> Keep model loaded after translation</label></details><div class="mb-translation-message">Translation replaces the summary, metadata, and box text in the node. The original wording is not retained. The first run may download model weights.</div><div class="mb-modal-buttons"><button class="mb-translation-cancel">Cancel</button><span></span><button class="primary mb-translation-run">Translate & replace</button></div>`;
+      shade.append(dialog); document.body.append(shade);
+      const closeButton = document.createElement("button"); closeButton.type = "button"; closeButton.className = "mb-modal-close"; closeButton.title = "Close"; closeButton.setAttribute("aria-label", "Close"); closeButton.textContent = "×"; dialog.insertBefore(closeButton, dialog.firstChild);
+      const sourceSelect = dialog.querySelector(".mb-source-language"), targetSelect = dialog.querySelector(".mb-target-language");
+      const message = dialog.querySelector(".mb-translation-message"), run = dialog.querySelector(".mb-translation-run");
+      const collectSettings = () => translationSettings({
+        source_language: sourceSelect.value, target_language: targetSelect.value,
+        model_size: dialog.querySelector(".mb-model-size").value,
+        device: dialog.querySelector(".mb-device").value, prompt_mode: dialog.querySelector(".mb-prompt-mode").value,
+        quantization: dialog.querySelector(".mb-quantization").value,
+        max_input_tokens: dialog.querySelector(".mb-max-input").value,
+        max_new_tokens: dialog.querySelector(".mb-max-new").value,
+        keep_model_loaded: dialog.querySelector(".mb-keep-loaded").checked,
+      });
+      const saveSettingsButton = document.createElement("button");
+      saveSettingsButton.type = "button"; saveSettingsButton.className = "mb-translation-save-settings"; saveSettingsButton.textContent = "Save settings";
+      run.parentElement.insertBefore(saveSettingsButton, run);
+      saveSettingsButton.onclick = () => { state.translationSettings = collectSettings(); syncWidgets(); close(); };
+      const previous = translationSettings(state.translationSettings || {});
+      dialog.querySelector(".mb-model-size").value = previous.model_size;
+      dialog.querySelector(".mb-device").value = previous.device;
+      dialog.querySelector(".mb-prompt-mode").value = previous.prompt_mode;
+      dialog.querySelector(".mb-quantization").value = previous.quantization;
+      dialog.querySelector(".mb-max-input").value = String(previous.max_input_tokens);
+      dialog.querySelector(".mb-max-new").value = String(previous.max_new_tokens);
+      dialog.querySelector(".mb-keep-loaded").checked = previous.keep_model_loaded;
+      const close = () => shade.remove();
+      closeButton.onclick = dialog.querySelector(".mb-translation-cancel").onclick = close;
+      shade.addEventListener("pointerdown", (event) => { if (event.target === shade) close(); });
+      shade.addEventListener("keydown", (event) => { if (event.key === "Escape") close(); });
+      try {
+        const response = await fetch(typeof app.api?.apiURL === "function" ? app.api.apiURL("/moss_layout_ydr/translation/languages") : "/moss_layout_ydr/translation/languages", { credentials: "same-origin" });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "Could not load the language list.");
+        if (!Array.isArray(payload.languages) || payload.languages.length === 0) throw new Error("The local language list is empty.");
+        for (const language of payload.languages || []) {
+          const sourceOption = new Option(language, language), targetOption = new Option(language, language);
+          sourceSelect.add(sourceOption); targetSelect.add(targetOption);
+        }
+        const savedSettings = state.translationSettings || {};
+        sourceSelect.value = savedSettings.source_language || "Auto Detect";
+        targetSelect.value = savedSettings.target_language || "English";
+        if (Array.isArray(payload.devices)) for (const device of payload.devices) if (!["default", "cpu"].includes(device)) dialog.querySelector(".mb-device").add(new Option(device, device));
+      } catch (error) {
+        message.textContent = "Could not load translation options: " + (error.message || String(error));
+        run.disabled = true;
+      }
+      run.addEventListener("click", async () => {
+        const settings = collectSettings();
+        state.translationSettings = settings;
+        syncWidgets();
+        const currentSegments = buildTranslationSegments();
+        translationBusy = true; refreshTranslationStatus(); run.disabled = true; message.textContent = "Translating… This may take a few minutes on the first run.";
+        try {
+          const url = typeof app.api?.apiURL === "function" ? app.api.apiURL("/moss_layout_ydr/translation/run") : "/moss_layout_ydr/translation/run";
+          const response = await fetch(url, { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ segments: currentSegments, settings }) });
+          const result = await response.json();
+          if (!response.ok || result.status !== "ready") throw new Error(result.error || "Translation failed.");
+          if (result.source_key !== translationSourceKey(currentSegments, settings)) throw new Error("The translated result did not match the current text/settings. Please retry.");
+          state.translationSettings = result.settings;
+          replacePromptText(result.values || {});
+          $(".mb-translation-status").textContent = "Translation replaced prompt text";
+          close();
+        } catch (error) {
+          message.textContent = error.message || String(error);
+          run.disabled = false;
+        } finally {
+          translationBusy = false; refreshTranslationStatus();
+        }
+      });
+    }
     function hitItemsAt(x, y) {
       const hits = [];
       for (let i = state.items.length - 1; i >= 0; i--) {
@@ -676,9 +1101,9 @@ app.registerExtension({
       dialog.innerHTML = `<h3>Edit ${TYPE_NAME[item.label] || "Object"}</h3>
         <label title="MOSS item label controls whether the box describes an object, a character, or visible text.">Element type</label>
         <select class="mb-kind"><option value="object">Object</option><option value="character">Character</option><option value="text">Text</option></select>
-        <div class="mb-caption-wrap"><label title="Describe the visible appearance and details inside this region.">Description</label><textarea class="mb-caption" placeholder="Describe the visible appearance, pose, materials, or typography…"></textarea><div class="mb-modal-help">This caption describes what should appear inside this box.</div></div>
-        <div class="mb-exact-wrap"><label title="Enter the exact visible characters. Preserve line breaks when needed.">Exact visible text</label><textarea class="mb-exact" placeholder="Type the exact words to render…"></textarea><div class="mb-modal-help">Required for a Text element. Keep exact spelling and line breaks here.</div></div>
-        <label title="Optional visual tags for this item, separated by commas.">Tags <span class="mb-modal-help">Optional comma-separated visual tags</span></label><input class="mb-tags" placeholder="e.g. foreground, warm lighting"/>
+        <div class="mb-caption-wrap"><div class="mb-field-head"><label title="Describe the visible appearance and details inside this region.">Description</label><div class="mb-field-actions"><button class="mb-enhance-field mb-enhance-caption" type="button" title="Generate improved text for only this box description">Generate</button></div></div><textarea class="mb-caption" placeholder="Describe the visible appearance, pose, materials, or typography…"></textarea><div class="mb-modal-help">This caption describes what should appear inside this box.</div></div>
+        <div class="mb-exact-wrap"><div class="mb-field-head"><label title="Enter the exact visible characters. Preserve line breaks when needed.">Exact visible text</label><div class="mb-field-actions"><button class="mb-enhance-field mb-enhance-exact" type="button" title="Generate an improved version of only this exact visible text">Generate</button></div></div><textarea class="mb-exact" placeholder="Type the exact words to render…"></textarea><div class="mb-modal-help">Required for a Text element. Keep exact spelling and line breaks here.</div></div>
+        <div class="mb-field-head"><label title="Optional visual tags for this item, separated by commas.">Tags <span class="mb-modal-help">Optional comma-separated visual tags</span></label><div class="mb-field-actions"><button class="mb-enhance-field mb-enhance-tags" type="button" title="Generate improved tags for only this box">Generate</button></div></div><input class="mb-tags" placeholder="e.g. foreground, warm lighting"/>
         <label title="Optional colors associated with this box.">Palette <span class="mb-modal-help">Choose colors for this element. Colors appear as a stripe on its box.</span></label><div class="mb-item-palette"></div><div class="mb-palette-tools"><button class="mb-add-item-color" type="button">＋ Add color</button></div>
         <div class="mb-modal-buttons"><button class="danger mb-delete">Delete box</button><span></span><button class="mb-cancel">Cancel</button><button class="primary mb-save">Save</button></div>`;
       shade.append(dialog); document.body.append(shade);
@@ -695,6 +1120,17 @@ app.registerExtension({
         exactWrap.style.display = "block";
       };
       updateType(); kind.addEventListener("change", updateType);
+      const enhanceModalField = (selector, control, field, fieldType) => {
+        const button = dialog.querySelector(selector);
+        button.addEventListener("click", () => enhanceFields([{
+          id: `item.${index}.${field}`, type: typeof fieldType === "function" ? fieldType() : fieldType,
+          text: control.value, current: () => control.value,
+          apply: (value) => { control.value = value; },
+        }], button));
+      };
+      enhanceModalField(".mb-enhance-caption", caption, "caption", () => `${TYPE_NAME[kind.value] || "Object"} description`);
+      enhanceModalField(".mb-enhance-exact", exact, "text", "exact visible text");
+      enhanceModalField(".mb-enhance-tags", dialog.querySelector(".mb-tags"), "tags", "box tags");
       const close = () => shade.remove();
       shade.addEventListener("pointerdown", (event) => { if (event.target === shade) { saveItem(false); saveState(); close(); } });
       dialog.querySelector(".mb-cancel").onclick = close;
@@ -703,15 +1139,17 @@ app.registerExtension({
       dialog.insertBefore(closeButton, dialog.firstChild);
       dialog.querySelector(".mb-delete").onclick = () => { state.items.splice(index, 1); selected = -1; saveState(); close(); };
       const saveItem = (validate = true) => {
-        item.label = kind.value; item.caption = caption.value.trim();
-        if (exact.value.trim()) item.text = exact.value;
-        else delete item.text;
-        if (validate && item.label === "text" && (!item.caption || !item.text.trim())) {
+        const captionValue = caption.value.trim();
+        const exactValue = exact.value;
+        const tags = dialog.querySelector(".mb-tags").value.split(",").map((x)=>x.trim()).filter(Boolean);
+        if (validate && kind.value === "text" && (!captionValue || !exactValue.trim())) {
           window.alert("Text elements need both typography/style and exact visible text. The box position is set on the canvas.");
           return false;
         }
-        const tags = dialog.querySelector(".mb-tags").value.split(",").map((x)=>x.trim()).filter(Boolean);
         const palette = draftPalette;
+        item.label = kind.value;
+        item.caption = captionValue;
+        if (exactValue.trim()) item.text = exactValue; else delete item.text;
         if (tags.length) item.tags = tags; else delete item.tags;
         if (palette.length) item.palette = palette; else delete item.palette;
         return true;
@@ -850,7 +1288,8 @@ app.registerExtension({
         suppressLayoutInput: inputLinked,
         suppressLayoutHash: inputLinked ? (state.lastLayoutInputHash || "") : "",
       };
-      selected = -1; sampleMode = null; summary.value = ""; meta.value = ""; canvasType.value = ""; summaryPalette = []; recentColors = [];
+      selected = -1; sampleMode = null; summary.value = ""; meta.value = ""; sourceSummary = ""; sourceMeta = ""; canvasType.value = ""; summaryPalette = []; recentColors = [];
+      autoTranslate = false; state.autoTranslate = false; delete state.translationSettings; autoTranslateToggle.checked = false;
       landscapeOrientation = false;
       ratioSelect.value = "1:1"; mpSelect.value = "1 MP"; mpInput.value = "1"; wInput.value = "1024"; hInput.value = "1024";
       syncWidgets(); draw();
@@ -866,9 +1305,32 @@ app.registerExtension({
       syncSizeFields();
     }
     $(".mb-swap").addEventListener("click",swapOrientationPreservingBoxes);
-    summary.addEventListener("input",syncWidgets);meta.addEventListener("input",syncWidgets);canvasType.addEventListener("change",syncWidgets);
+    summary.addEventListener("input",syncWidgets);
+    meta.addEventListener("input",syncWidgets);
+    canvasType.addEventListener("change",syncWidgets);
+    $(".mb-translate-open").addEventListener("click",openTranslationDialog);
+    root.querySelectorAll(".mb-enhancer-settings").forEach((button) => button.addEventListener("click",openEnhancerSettings));
+    const originalOnRemoved = node.onRemoved;
+    node.onRemoved = function (...args) {
+      fetch(enhancerUrl("release"), {
+        method: "POST", credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ node_id: String(node.id) }),
+      }).catch(() => {});
+      return originalOnRemoved?.apply(this, args);
+    };
+    $(".mb-enhance-field[data-enhance-target='summary']").addEventListener("click", (event) => enhanceFields([{
+      id: "summary.caption", type: "whole-image summary", text: summary.value,
+      current: () => summary.value, apply: (value) => { summary.value = value; },
+    }], event.currentTarget));
+    $(".mb-enhance-field[data-enhance-target='meta']").addEventListener("click", (event) => enhanceFields([{
+      id: "summary.meta", type: "summary metadata tags", text: meta.value,
+      current: () => meta.value, apply: (value) => { meta.value = value; },
+    }], event.currentTarget));
+    $(".mb-enhance-all").addEventListener("click", (event) => enhanceFields(gatherEnhanceAllFields(), event.currentTarget));
+    autoTranslateToggle.addEventListener("change",()=>{autoTranslate=autoTranslateToggle.checked;syncWidgets();});
     $(".mb-add-summary-color").addEventListener("click",(event)=>openColorPopover(event.currentTarget,(color)=>{summaryPalette.push(color);rememberColor(color);syncWidgets();draw();},recentColors));$(".mb-pick-summary").addEventListener("click",()=>{sampleMode={target:summaryPalette};canvas.style.cursor="copy";$(".mb-preview-note").textContent="Click the preview to sample a color";});
-    savedState.addEventListener("input",()=>{try{const parsed=JSON.parse(savedState.value);if(Array.isArray(parsed.items)){state=parsed;summaryPalette=Array.isArray(parsed.summaryPalette)?parsed.summaryPalette:[];recentColors=Array.isArray(parsed.recentColors)?parsed.recentColors.filter((color)=>/^#[0-9a-f]{6}$/i.test(color)).slice(0,10):[];backgroundOpacity=clampPercent(parsed.backgroundOpacity);backgroundVisible=parsed.backgroundVisible!==false;opacitySlider.value=String(backgroundOpacity);updateBackgroundControls();selected=-1;setValue(node,"editor_state",savedState.value);draw();}}catch{}});
+    savedState.addEventListener("input",()=>{try{const parsed=JSON.parse(savedState.value);if(Array.isArray(parsed.items)){state=migrateLegacyTranslation(node,mergeSavedEnhancerSettings(node,parsed));summary.value=getValue(node,"summary","");meta.value=getValue(node,"summary_meta","");sourceSummary=summary.value;sourceMeta=meta.value;autoTranslate=state.autoTranslate===true;autoTranslateToggle.checked=autoTranslate;summaryPalette=Array.isArray(state.summaryPalette)?state.summaryPalette:[];recentColors=Array.isArray(state.recentColors)?state.recentColors.filter((color)=>/^#[0-9a-f]{6}$/i.test(color)).slice(0,10):[];backgroundOpacity=clampPercent(state.backgroundOpacity);backgroundVisible=state.backgroundVisible!==false;opacitySlider.value=String(backgroundOpacity);updateBackgroundControls();selected=-1;savedState.value=JSON.stringify(state);setValue(node,"editor_state",savedState.value);setValue(node,"prompt_enhancer_settings",JSON.stringify(state.promptEnhancerSettings||{}));refreshTranslationStatus();draw();}}catch{}});
     stateToggle.addEventListener("click",()=>{savedState.classList.toggle("open");stateToggle.textContent=savedState.classList.contains("open")?"Advanced ▾":"Advanced ▸";});
 
     function setPreview(ref, label="Latest image preview", force=false) {
@@ -1050,16 +1512,45 @@ app.registerExtension({
         delete state.suppressLayoutInput;
         delete state.suppressLayoutHash;
       }
+      if (imported.suppress_input) {
+        state.suppressLayoutInput = true;
+        state.suppressLayoutHash = imported.input_hash || state.lastLayoutInputHash || "";
+      }
       if (imported.has_summary) {
         summaryPalette = Array.isArray(imported.summary?.palette) ? imported.summary.palette : [];
         summary.value = imported.summary?.caption || "";
         meta.value = Array.isArray(imported.summary?.meta) ? imported.summary.meta.join(", ") : "";
+        sourceSummary = summary.value; sourceMeta = meta.value;
         canvasType.value = ["single", "multi_panel", "collage"].includes(imported.summary?.canvas) ? imported.summary.canvas : "";
         if (canvasType.value) state.summaryCanvas = canvasType.value;
         else delete state.summaryCanvas;
       }
       selected = -1;
       saveState();
+    };
+    const applyBackendReplacement = (output) => {
+      const payload = output?.moss_layout_replace ?? output?.ui?.moss_layout_replace;
+      const replacement = Array.isArray(payload) ? payload.at(-1) : payload;
+      if (!replacement || !Array.isArray(replacement.items)) return;
+      if (typeof replacement.summary === "string") summary.value = replacement.summary;
+      if (Array.isArray(replacement.meta)) meta.value = replacement.meta.join(", ");
+      replacement.items.forEach((fields, outputIndex) => {
+        const index = Number.isInteger(fields?.source_index) ? fields.source_index : outputIndex;
+        const item = state.items[index];
+        if (!item || !fields || typeof fields !== "object") return;
+        for (const field of ["caption", "text"]) {
+          if (typeof fields[field] !== "string") continue;
+          if (field === "text" && !fields[field].trim()) delete item.text;
+          else item[field] = fields[field];
+        }
+        if (Array.isArray(fields.tags)) item.tags = fields.tags;
+      });
+      sourceSummary = summary.value;
+      sourceMeta = meta.value;
+      if (replacement.translation_settings) state.translationSettings = replacement.translation_settings;
+      saveState();
+      renderSidebar();
+      draw();
     };
     const onBackendSize = (event) => {
       const eventId = String(event.detail?.nodeId ?? "").split(":").at(-1);
@@ -1071,6 +1562,11 @@ app.registerExtension({
       if (eventId === String(node.id).split(":").at(-1)) applyBackendLayout(event.detail?.output);
     };
     window.addEventListener("moss-layout-import", onBackendLayout);
+    const onBackendReplacement = (event) => {
+      const eventId = String(event.detail?.nodeId ?? "").split(":").at(-1);
+      if (eventId === String(node.id).split(":").at(-1)) applyBackendReplacement(event.detail?.output);
+    };
+    window.addEventListener("moss-layout-replace", onBackendReplacement);
     function restoreConfiguredState() {
       // The DOM editor is created before ComfyUI restores widgets_values.
       // Rebuild it after configure so execution callbacks do not overwrite the
@@ -1094,12 +1590,18 @@ app.registerExtension({
       if (mpSelect.value !== "Custom") mpInput.value = parseFloat(mpSelect.value);
       summary.value = getValue(node, "summary", "");
       meta.value = getValue(node, "summary_meta", "");
+      sourceSummary = summary.value; sourceMeta = meta.value;
+      autoTranslate = state.autoTranslate === true; autoTranslateToggle.checked = autoTranslate;
       canvasType.value = ["single", "multi_panel", "collage"].includes(state.summaryCanvas) ? state.summaryCanvas : "";
+      delete state.translated;
+      delete state.translationView;
       canvasType.value = ["single", "multi_panel", "collage"].includes(state.summaryCanvas) ? state.summaryCanvas : "";
       opacitySlider.value = String(backgroundOpacity);
       migrateItemsToWorkspace();
       savedState.value = JSON.stringify(state);
+      setValue(node, "editor_state", savedState.value);
       selected = -1;
+      refreshTranslationStatus();
       updateBackgroundControls();
       renderSidebar();
       draw();
@@ -1124,6 +1626,7 @@ app.registerExtension({
       }
       applyBackendSize(output);
       applyBackendLayout(output);
+      applyBackendReplacement(output);
       syncConnectedBackground();
     };
 
@@ -1136,6 +1639,7 @@ app.registerExtension({
       window.removeEventListener("moss-layout-output-image",onOutputImage);
       window.removeEventListener("moss-layout-size",onBackendSize);
       window.removeEventListener("moss-layout-import",onBackendLayout);
+      window.removeEventListener("moss-layout-replace",onBackendReplacement);
       window.removeEventListener("moss-layout-refresh-background",onBackgroundRefresh);
       window.clearInterval(backgroundRefreshTimer);
       if (node.onConnectionsChange !== previousOnConnectionsChange) node.onConnectionsChange = previousOnConnectionsChange;
@@ -1167,6 +1671,7 @@ app.registerExtension({
     }
     if(ratioSelect.value!=="Custom") { const [initialWidth,initialHeight]=calculatedSize();wInput.value=initialWidth;hInput.value=initialHeight; }
     migrateItemsToWorkspace();
+    migrateWorkspaceToSquare();
     savedState.value=JSON.stringify(state);
     syncWidgets();draw();syncConnectedBackground();
   },

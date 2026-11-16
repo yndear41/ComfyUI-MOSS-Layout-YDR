@@ -8,6 +8,12 @@ The repository identifies its node code, documentation, examples, workflows, and
 
 This distribution is consequently provided under GPL-3.0-only. The full license text is included in [LICENSE](LICENSE). MOSS Layout YDR is an independent ComfyUI node and is not affiliated with or endorsed by Deno2026.
 
+## TranslateGemma
+
+The optional, locally run text-translation engine is adapted from [rookiestar28/ComfyUI-TranslateGemma](https://github.com/rookiestar28/ComfyUI-TranslateGemma), pinned to commit [`268eb10a9b852249df4fe1ad2294d5c4d9261edc`](https://github.com/rookiestar28/ComfyUI-TranslateGemma/tree/268eb10a9b852249df4fe1ad2294d5c4d9261edc). The vendored source files are in [`vendor/translategemma/`](vendor/translategemma/) and retain their upstream MIT license in [`vendor/translategemma/LICENSE`](vendor/translategemma/LICENSE). Translation is lazy-loaded and its dependencies are optional; the layout editor does not require them.
+
+TranslateGemma model weights are distributed separately by their publisher. Users must accept the model terms and follow its license before downloading or using the weights.
+
 ## Demonstration image
 
 [examples/assets/moss-layout-example.png](examples/assets/moss-layout-example.png) was supplied by the project maintainer as a README demonstration image; it is not part of the example workflow or model input. The repository's GPL notice does not claim ownership of this image, and this notice does not grant a separate license for it; its distribution rights remain with its copyright holder.

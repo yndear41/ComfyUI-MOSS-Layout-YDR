@@ -1,0 +1,7 @@
+# Optional dependencies for the embedded TranslateGemma text translation.
+# Keep using the PyTorch build supplied with ComfyUI; do not replace it here.
+transformers>=4.57.0
+accelerate
+pillow
+langid>=1.1.6
+opencc-python-reimplemented

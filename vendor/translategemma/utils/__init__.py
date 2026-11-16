@@ -1,0 +1,1 @@
+"""Vendored TranslateGemma runtime module."""

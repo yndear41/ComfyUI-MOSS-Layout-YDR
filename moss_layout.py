@@ -32,6 +32,36 @@ def _snap_dimension(value, quantum, round_down=False):
     return max(64, int(units) * quantum)
 
 
+def _fit_dimensions(ratio, area, quantum=DIMENSION_QUANTUM, round_down=False):
+    """Choose aligned dimensions that keep the requested ratio with low area drift."""
+    ratio = max(1e-9, float(ratio))
+    area = max(4096.0, float(area))
+    ideal_width = math.sqrt(area * ratio)
+    ideal_height = math.sqrt(area / ratio)
+    center_width = ideal_width / quantum
+    center_height = ideal_height / quantum
+    max_units = 65536 // quantum
+    width_units = range(max(4, math.floor(center_width) - 8), min(max_units, math.ceil(center_width) + 8) + 1)
+    candidates = []
+    for width_unit in width_units:
+        width = width_unit * quantum
+        height_units = set()
+        for center in (width_unit / ratio, area / (quantum * quantum * width_unit), center_height):
+            height_units.update(range(max(4, math.floor(center) - 3), min(max_units, math.ceil(center) + 3) + 1))
+        for height_unit in height_units:
+            height = height_unit * quantum
+            candidate_area = width * height
+            if round_down and candidate_area > area:
+                continue
+            ratio_error = abs((width / height) / ratio - 1.0)
+            area_error = abs(candidate_area / area - 1.0)
+            candidates.append((area_error + 2.0 * ratio_error, ratio_error, area_error, -candidate_area, width, height))
+    if not candidates:
+        return _snap_dimension(ideal_width, quantum, True), _snap_dimension(ideal_height, quantum, True)
+    best = min(candidates)
+    return best[-2], best[-1]
+
+
 def _target_megapixels(resolution, megapixels, input_megapixels=None):
     if input_megapixels is not None:
         try:
@@ -66,7 +96,7 @@ def calculate_size(aspect_ratio, resolution, width, height, megapixels, portrait
         area = mp * 1_000_000
         scale = math.sqrt(area / (rw * rh))
         w, h = rw * scale, rh * scale
-    return _snap_dimension(w, quantum, round_down), _snap_dimension(h, quantum, round_down)
+    return _fit_dimensions(w / h, mp * 1_000_000, quantum, round_down)
 
 
 def _external_size(aspect_ratio, width, height, input_width, input_height, quantum, portrait=False):
@@ -221,12 +251,12 @@ def parse_layout_text(value):
 
 
 def normalize_items(source, width, height, source_width=None, source_height=None,
-                    bbox_coord_space="abs", bbox_format="xyxy"):
+                    bbox_coord_space="abs", bbox_format="xyxy", include_source_indices=False):
     raw_items = source.get("items", []) if isinstance(source, dict) else []
     if not isinstance(raw_items, list):
         return []
     items = []
-    for entry in raw_items:
+    for source_index, entry in enumerate(raw_items):
         if not isinstance(entry, dict):
             continue
         label = entry.get("label", "object")
@@ -270,6 +300,8 @@ def normalize_items(source, width, height, source_width=None, source_height=None
             continue
         item = {"label": label, "caption": caption,
                 "bbox": [int(round(x1)), int(round(y1)), int(round(x2)), int(round(y2))]}
+        if include_source_indices:
+            item["_source_index"] = source_index
         exact_text = entry.get("text")
         if exact_text is not None:
             exact_text = str(exact_text)
@@ -350,6 +382,85 @@ def build_moss_elements(items, width, height):
     return elements, ", ".join(character_indices)
 
 
+def _translation_segments(summary_caption, meta, items):
+    segments = []
+    if isinstance(summary_caption, str) and summary_caption.strip():
+        segments.append({"id": "summary.caption", "text": summary_caption})
+    for index, value in enumerate(meta if isinstance(meta, list) else []):
+        if isinstance(value, str) and value.strip():
+            segments.append({"id": f"summary.meta.{index}", "text": value})
+    for index, item in enumerate(items if isinstance(items, list) else []):
+        if not isinstance(item, dict):
+            continue
+        for field in ("caption", "text"):
+            value = item.get(field)
+            if isinstance(value, str) and value.strip():
+                segments.append({"id": f"item.{index}.{field}", "text": value.strip() if field == "caption" else value})
+        tags = item.get("tags", [])
+        if isinstance(tags, list):
+            for tag_index, value in enumerate(tags):
+                if isinstance(value, str) and value.strip():
+                    segments.append({"id": f"item.{index}.tags.{tag_index}", "text": value})
+    return segments
+
+
+def _apply_translated_values(document, translated_state, summary_caption, meta,
+                             source_items=None, compiled_source_indices=None):
+    if not isinstance(translated_state, dict) or translated_state.get("status") != "ready":
+        return None
+    values = translated_state.get("values")
+    settings = translated_state.get("settings")
+    if not isinstance(values, dict) or not isinstance(settings, dict):
+        return None
+    try:
+        from .translation_api import source_key
+        text_items = source_items if isinstance(source_items, list) else document.get("items", [])
+        current_key = source_key(_translation_segments(summary_caption, meta, text_items), settings)
+    except Exception:
+        return None
+    if current_key != translated_state.get("source_key"):
+        return None
+    translated_document = json.loads(json.dumps(document, ensure_ascii=False))
+    summary = translated_document.get("summary", {})
+    value = values.get("summary.caption")
+    if isinstance(value, str):
+        summary["caption"] = value
+    meta_override = values.get("summary.meta_override")
+    if isinstance(meta_override, str):
+        summary["meta"] = [part.strip() for part in meta_override.split(",") if part.strip()]
+    elif isinstance(meta_override, list) and all(isinstance(entry, str) for entry in meta_override):
+        summary["meta"] = meta_override
+    else:
+        for index, original in enumerate(meta):
+            value = values.get(f"summary.meta.{index}")
+            if isinstance(value, str):
+                translated_meta = summary.setdefault("meta", list(meta))
+                if index < len(translated_meta):
+                    translated_meta[index] = value
+    for index, item in enumerate(translated_document.get("items", [])):
+        source_index = compiled_source_indices[index] if compiled_source_indices and index < len(compiled_source_indices) else index
+        for field in ("caption", "text"):
+            value = values.get(f"item.{source_index}.{field}")
+            if isinstance(value, str):
+                if field == "text" and not value.strip():
+                    item.pop(field, None)
+                    continue
+                item[field] = value
+        tags = item.get("tags")
+        tags_override = values.get(f"item.{source_index}.tags_override")
+        if isinstance(tags_override, list) and all(isinstance(entry, str) for entry in tags_override):
+            if tags_override:
+                item["tags"] = tags_override
+            else:
+                item.pop("tags", None)
+        elif isinstance(tags, list):
+            for tag_index in range(len(tags)):
+                value = values.get(f"item.{source_index}.tags.{tag_index}")
+                if isinstance(value, str):
+                    tags[tag_index] = value
+    return translated_document
+
+
 class MOSSLayoutComposer:
     @classmethod
     def INPUT_TYPES(cls):
@@ -365,6 +476,7 @@ class MOSSLayoutComposer:
                 "dimension_multiple": (DIMENSION_MULTIPLES, {"default": "16", "tooltip": "Legacy workflow compatibility field. The value is ignored; dimensions are aligned automatically to 16 px.", **socketless}),
                 "portrait": ("BOOLEAN", {"default": False, "tooltip": "Internal orientation state controlled by the swap button.", **socketless}),
                 "editor_state": ("STRING", {"multiline": True, "default": "{}", "tooltip": "Saved box editor data. It is tucked under Advanced and normally does not need editing.", **socketless}),
+                "prompt_enhancer_settings": ("STRING", {"multiline": True, "default": "{}", "tooltip": "Saved settings for the in-node text generator.", **socketless}),
             },
             "optional": {
                 "layout_text": ("STRING", {"forceInput": True, "multiline": True, "tooltip": "Import a MOSS layout JSON string or one item per line."}),
@@ -374,7 +486,9 @@ class MOSSLayoutComposer:
                 "input_width": ("INT", {"forceInput": True, "tooltip": "Optional wired width override. When only one dimension is connected, the selected aspect ratio supplies the other."}),
                 "input_height": ("INT", {"forceInput": True, "tooltip": "Optional wired height override. When only one dimension is connected, the selected aspect ratio supplies the other."}),
                 "input_megapixels": ("FLOAT", {"forceInput": True, "tooltip": "Optional wired megapixel override. Background Resize keeps its source ratio and scales to this area."}),
+                "clip": ("CLIP", {"tooltip": "Connect the same CLIP encoder used by Generate Text. This model powers the in-node Generate buttons."}),
             },
+            "hidden": {"unique_id": "UNIQUE_ID"},
         }
 
     RETURN_TYPES = ("STRING", "INT", "INT", "ARRAY", "STRING", "ARRAY", "STRING", "STRING")
@@ -386,7 +500,13 @@ class MOSSLayoutComposer:
     def compose(self, summary, aspect_ratio, width, height, resolution, megapixels, portrait,
                 dimension_multiple="16", editor_state="{}", layout_text=None,
                 background=None, background_resize=None, summary_meta="", input_width=None,
-                input_height=None, input_megapixels=None, **_legacy_inputs):
+                input_height=None, input_megapixels=None, clip=None, unique_id=None,
+                prompt_enhancer_settings="{}", **_legacy_inputs):
+        try:
+            from .prompt_enhancer_api import cache_connected_clip
+            cache_connected_clip(unique_id, clip)
+        except Exception:
+            pass
         quantum = DIMENSION_QUANTUM
         resizing_background = background_resize is not None
         if background_resize is not None:
@@ -488,13 +608,16 @@ class MOSSLayoutComposer:
                     mapped_items.append(mapped)
             normalize_source["items"] = mapped_items
 
-        items = normalize_items(
+        indexed_items = normalize_items(
             normalize_source, width, height,
             source_width=source_width if imported_layout else None,
             source_height=source_height if imported_layout else None,
             bbox_coord_space=source.get("bbox_coord_space", "abs") if isinstance(source, dict) else "abs",
             bbox_format=source.get("bbox_format", "xyxy") if isinstance(source, dict) else "xyxy",
+            include_source_indices=True,
         )
+        source_item_indices = [item.pop("_source_index") for item in indexed_items]
+        items = indexed_items
         imported_summary = imported_layout and "summary" in source
         if imported_summary:
             summary_caption = str(source_summary.get("caption", "")).strip() or (summary or "").strip()
@@ -524,6 +647,50 @@ class MOSSLayoutComposer:
             "summary": summary_object,
             "items": items,
         }
+        # A connected layout is normalized into the same compact item array the
+        # editor displays, so translation IDs match the visible box order.
+        source_text_items = items if layout_input_active else (
+            source.get("items", []) if isinstance(source, dict) else []
+        )
+        auto_translate = saved_editor_state.get("autoTranslate") is True
+        did_translate = False
+        translation_settings = saved_editor_state.get("translationSettings")
+        if not isinstance(translation_settings, dict):
+            translation_settings = {}
+        if auto_translate:
+            translation_settings = {
+                "source_language": translation_settings.get("source_language", "Auto Detect"),
+                "target_language": translation_settings.get("target_language", "English"),
+                "model_size": translation_settings.get("model_size", "4B"),
+                "device": translation_settings.get("device", "default"),
+                "prompt_mode": translation_settings.get("prompt_mode", "auto"),
+                "max_new_tokens": translation_settings.get("max_new_tokens", 0),
+                "max_input_tokens": translation_settings.get("max_input_tokens", 0),
+                "quantization": translation_settings.get("quantization", "none"),
+                "keep_model_loaded": translation_settings.get("keep_model_loaded", True),
+            }
+            translation_segments = _translation_segments(summary_caption, meta, source_text_items)
+            if translation_segments:
+                try:
+                    from .translation_api import translate_segments
+                    translation_result = translate_segments(translation_segments, translation_settings)
+                    translated_document = _apply_translated_values(
+                        document, translation_result, summary_caption, meta,
+                        source_items=source_text_items,
+                        compiled_source_indices=None if layout_input_active else source_item_indices,
+                    )
+                    if translated_document is None:
+                        raise RuntimeError("The translated fields did not match the current MOSS layout.")
+                    document = translated_document
+                    items = document["items"]
+                    summary_object = document["summary"]
+                    summary_caption = str(summary_object.get("caption", ""))
+                    meta = summary_object.get("meta", []) if isinstance(summary_object.get("meta", []), list) else []
+                    saved_editor_state["translationSettings"] = translation_result.get("settings", translation_settings)
+                    did_translate = True
+                except Exception as exc:
+                    raise RuntimeError(f"MOSS Layout YDR automatic translation failed: {exc}") from exc
+
         encoded = json.dumps(document, ensure_ascii=False, separators=(",", ":"))
         prompt = compile_moss_prompt(document)
         moss_elements, character_boxes = build_moss_elements(items, width, height)
@@ -571,8 +738,25 @@ class MOSSLayoutComposer:
                 "has_summary": imported_layout and "summary" in source,
                 "has_dimensions": imported_dimensions,
                 "input_hash": layout_input_hash,
-                "clear_suppression": True,
+                "clear_suppression": not did_translate,
+                "suppress_input": did_translate,
             }]
+        if did_translate:
+            if layout_input_active:
+                ui["moss_layout_import"][-1]["has_summary"] = True
+            else:
+                ui["moss_layout_replace"] = [{
+                    "summary": summary_object.get("caption", ""),
+                    "meta": meta,
+                    "items": [
+                        {
+                            "source_index": source_item_indices[index] if index < len(source_item_indices) else index,
+                            **{key: item[key] for key in ("caption", "text", "tags") if key in item},
+                        }
+                        for index, item in enumerate(items)
+                    ],
+                    "translation_settings": saved_editor_state.get("translationSettings", translation_settings),
+                }]
         image = background_resize if background_resize is not None else background
         if image is not None:
             # Echo an IMAGE preview so the node can paint wired backgrounds without adding an
