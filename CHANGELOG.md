@@ -27,6 +27,8 @@
 - Add a saved Auto on run switch that translates changed layout text during workflow execution and reuses an unchanged translation.
 - Allow independent edits to translated summary, metadata, box descriptions, exact text, and tags without changing the source text.
 - Replace prompt text directly after manual or automatic translation; remove the original/translated view, cached translation state, and duplicate translated output sockets.
+- Keep the connected CLIP reference alive when ComfyUI rebuilds a node during workflow restoration, and log CLIP cache failures with the affected node ID.
+- Clarify that the summary and all bounding-box descriptions are context for the same image during prompt enhancement.
 
 ## 0.1.0 — Initial release
 

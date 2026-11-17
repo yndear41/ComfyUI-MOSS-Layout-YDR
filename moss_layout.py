@@ -505,8 +505,8 @@ class MOSSLayoutComposer:
         try:
             from .prompt_enhancer_api import cache_connected_clip
             cache_connected_clip(unique_id, clip)
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[MOSS Layout YDR] Could not cache the connected CLIP for node {unique_id!r}: {exc}")
         quantum = DIMENSION_QUANTUM
         resizing_background = background_resize is not None
         if background_resize is not None:

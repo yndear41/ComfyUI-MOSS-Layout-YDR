@@ -322,6 +322,7 @@ app.registerExtension({
     const root = document.createElement("div");
     root.className = "moss-board";
     root.title = "Compose a MOSS-Image layout. Draw regions and double-click to edit; use the mouse wheel to zoom the workflow and hold Space while dragging to pan.";
+    const progressGradientId = `moss-enhancer-gradient-${String(node.id).replace(/[^a-zA-Z0-9_-]/g, "_")}`;
     root.innerHTML = `
       <div class="mb-head">
         <div class="mb-control"><label title="Choose the generation field proportions. The working field and box positions stay fixed.">Aspect ratio</label><select class="mb-ratio"></select></div>
@@ -340,7 +341,7 @@ app.registerExtension({
         <div class="mb-canvas-wrap"><canvas class="mb-canvas" width="${CW}" height="${CH}" tabindex="0" aria-label="Layout canvas"></canvas><div class="mb-empty">Draw a region by dragging on the canvas</div></div>
         <aside class="mb-prompt">
           <div class="mb-translation-row"><button class="mb-translate-open" type="button" title="Translate and replace all prompt text locally with TranslateGemma">Translate & replace…</button><label class="mb-auto-translate-label" title="Translate and replace current prompt text on every workflow run"><input class="mb-auto-translate" type="checkbox">Auto on run</label></div>
-          <div class="mb-translation-row mb-enhancer-row"><button class="mb-enhance-all" type="button" title="Generate improved text for every filled field with the CLIP encoder connected to this node">Generate all</button><button class="mb-enhancer-settings" type="button" title="Edit shared text generation settings" aria-label="Text generation settings">⚙</button><span class="mb-translation-status" aria-live="polite">Prompt ready</span></div>
+          <div class="mb-translation-row mb-enhancer-row"><button class="mb-enhance-all" type="button" title="Generate improved text for every filled field with the CLIP encoder connected to this node">Generate all</button><button class="mb-enhancer-settings" type="button" title="Edit shared text generation settings" aria-label="Text generation settings">⚙</button><span class="mb-enhancer-progress" role="progressbar" aria-label="Prompt generation progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><svg viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="${progressGradientId}" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#f0b2cc"/><stop offset="52%" stop-color="#9f456e"/><stop offset="100%" stop-color="#76539b"/></linearGradient></defs><circle class="mb-progress-track" cx="12" cy="12" r="9"/><circle class="mb-progress-value" cx="12" cy="12" r="9" stroke="url(#${progressGradientId})"/></svg></span><span class="mb-translation-status" aria-live="polite">Prompt ready</span></div>
           <div class="mb-field-head"><label title="Describe the complete image: scene, composition, lighting, style, and visual relationships.">Summary <span class="mb-info" tabindex="0" data-help="Describe the whole image in natural language: scene, composition, lighting, style, and how the elements relate. Keep box-specific appearance in each box description.">i</span></label><div class="mb-field-actions"><button class="mb-enhance-field" data-enhance-target="summary" type="button" title="Generate improved text for only the summary field">Generate</button></div></div>
           <textarea class="mb-summary" placeholder="Describe the whole image: scene, composition, lighting, and style…" title="Global description of the whole image"></textarea>
           <div class="mb-field-head"><label title="Optional comma-separated medium or genre tags supported by MOSS-Image.">Summary metadata <span class="mb-info" tabindex="0" data-help="Optional MOSS-Image summary tags such as 'editorial photography, product campaign'. This becomes summary.meta in the JSON. Leave blank if you do not need tags.">i</span></label><div class="mb-field-actions"><button class="mb-enhance-field" data-enhance-target="meta" type="button" title="Generate improved tags for only the summary metadata">Generate</button></div></div>
@@ -376,6 +377,7 @@ app.registerExtension({
       .mb-meta{min-height:48px}
       .mb-preview-note{margin-top:4px}
       .mb-translation-row{display:flex;align-items:center;gap:5px;flex:0 0 auto;margin:2px 0}.mb-translation-row button{background:#1d2325;color:#cbd4d7;border:1px solid var(--line);border-radius:5px;padding:4px 7px;cursor:pointer;font:inherit}.mb-translation-row button:hover:not(:disabled){border-color:rgba(158,175,180,.55);color:#fff}.mb-translation-row button:disabled{opacity:.45;cursor:default}.mb-auto-translate-label{display:flex;align-items:center;gap:3px;white-space:nowrap;cursor:pointer}.mb-auto-translate{width:13px!important;height:13px;padding:0!important;margin:0;accent-color:#9eafb4}.mb-translation-status{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:10px}
+      .mb-enhancer-progress{display:none;align-items:center;justify-content:center;flex:0 0 18px;width:18px;height:18px}.mb-enhancer-progress.is-active{display:inline-flex}.mb-enhancer-progress svg{display:block;width:16px;height:16px;overflow:visible}.mb-progress-track{fill:none;stroke:rgba(255,255,255,.12);stroke-width:2.2}.mb-progress-value{fill:none;stroke-width:2.4;stroke-linecap:round;stroke-dasharray:56.55;stroke-dashoffset:56.55;transform:rotate(-90deg);transform-origin:12px 12px;transition:stroke-dashoffset .14s linear}
       .mb-field-head{display:flex;align-items:center;justify-content:space-between;gap:6px;min-width:0}.mb-field-head>label{margin:0}.mb-field-actions{display:flex;align-items:center;gap:3px;flex:0 0 auto}.moss-board .mb-enhance-field{flex:0 0 auto;padding:2px 6px;background:#1d2325;color:#bfcacd;border:1px solid var(--line);border-radius:4px;font:inherit;font-size:10px;line-height:1.4;cursor:pointer}.moss-board .mb-enhance-field:hover:not(:disabled){color:#fff;border-color:rgba(158,175,180,.6)}.moss-board .mb-enhance-field:disabled{opacity:.45;cursor:wait}.mb-enhancer-modal{width:min(500px,calc(100vw - 28px))}.mb-enhancer-modal .mb-enhancer-advanced{margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,.08)}.mb-enhancer-modal .mb-enhancer-advanced>summary{color:#b5bec1;cursor:pointer}.mb-enhancer-modal .mb-enhancer-message{margin-top:8px;color:#8e999c;font-size:10px}.mb-enhancer-modal .mb-enhancer-prompt{min-height:110px}.mb-enhancer-modal .mb-enhancer-check{display:flex;align-items:center;gap:8px}.mb-enhancer-modal .mb-enhancer-check input{width:auto;margin:0}
       .mb-advanced{flex:0 0 auto;margin-top:4px}
       .mb-elements{flex:0 0 auto;min-height:0;max-height:130px;overflow-y:auto;overflow-x:hidden}
@@ -449,6 +451,7 @@ app.registerExtension({
     let state = readState(node), selected = -1, gesture = null, latestPreview = null, showHelp = null, sampleMode = null, previewRect = null;
     let sourceSummary = getValue(node, "summary", ""), sourceMeta = getValue(node, "summary_meta", "");
     let translationBusy = false, enhancerBusy = false, autoTranslate = state.autoTranslate === true;
+    let enhancerProgressTimer = null, enhancerProgressHideTimer = null;
     autoTranslateToggle.checked = autoTranslate;
     let landscapeOrientation = state.orientation ? state.orientation === "landscape" : Boolean(getValue(node, "portrait", false));
     const boxUiColors = new WeakMap();
@@ -573,8 +576,47 @@ app.registerExtension({
       const route = `/moss_layout_ydr/prompt-enhancer/${path}`;
       return typeof app.api?.apiURL === "function" ? app.api.apiURL(route) : route;
     }
+    function clipSocketConnected() {
+      return (node.inputs || []).some((input) => input.name === "clip" && input.link != null);
+    }
     function enhancerOptionsUrl() {
       return `${enhancerUrl("options")}?node_id=${encodeURIComponent(node.id)}`;
+    }
+    function setEnhancerProgress(value) {
+      const progress = $(".mb-enhancer-progress");
+      const percent = Math.max(0, Math.min(100, Number(value) || 0));
+      const circle = progress?.querySelector(".mb-progress-value");
+      if (circle) circle.style.strokeDashoffset = String((56.55 * (1 - percent / 100)).toFixed(2));
+      progress?.setAttribute("aria-valuenow", String(Math.round(percent)));
+    }
+    function startEnhancerProgress() {
+      clearInterval(enhancerProgressTimer);
+      clearTimeout(enhancerProgressHideTimer);
+      $(".mb-enhancer-progress")?.classList.add("is-active");
+      setEnhancerProgress(0);
+    }
+    function animateEnhancerFieldProgress(fieldIndex, totalFields, field) {
+      clearInterval(enhancerProgressTimer);
+      const startedAt = performance.now();
+      const estimateMs = Math.max(7000, Math.min(60000, 5000 + String(field.text || "").length * 26));
+      enhancerProgressTimer = setInterval(() => {
+        const partial = Math.min(0.92, ((performance.now() - startedAt) / estimateMs) * 0.92);
+        setEnhancerProgress(((fieldIndex + partial) / totalFields) * 100);
+      }, 100);
+    }
+    function completeEnhancerFieldProgress(fieldIndex, totalFields) {
+      clearInterval(enhancerProgressTimer);
+      enhancerProgressTimer = null;
+      setEnhancerProgress(((fieldIndex + 1) / totalFields) * 100);
+    }
+    function finishEnhancerProgress(success) {
+      clearInterval(enhancerProgressTimer);
+      enhancerProgressTimer = null;
+      if (success) setEnhancerProgress(100);
+      enhancerProgressHideTimer = setTimeout(() => {
+        $(".mb-enhancer-progress")?.classList.remove("is-active");
+        setEnhancerProgress(0);
+      }, success ? 360 : 180);
     }
     function gatherEnhanceAllFields() {
       const fields = [];
@@ -637,40 +679,53 @@ app.registerExtension({
       enhancerBusy = true;
       refreshTranslationStatus();
       $(".mb-translation-status").textContent = filled.length === 1 ? "Generating for one field…" : `Generating for ${filled.length} fields…`;
+      let progressStarted = false, generationSucceeded = false;
       try {
         const clipResponse = await fetch(enhancerOptionsUrl(), { credentials: "same-origin" });
         const clipStatus = await clipResponse.json();
         if (!clipResponse.ok) throw new Error(clipStatus.error || "Could not check the connected CLIP input.");
-        if (!clipStatus.clip_available) throw new Error("Connect a CLIP encoder to this node and run the workflow once before generating text.");
-        const response = await fetch(enhancerUrl("run"), {
-          method: "POST", credentials: "same-origin",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ node_id: String(node.id), segments: filled.map(({ id, type, text }) => ({ id, type, text })), context: buildEnhancementContext(), settings }),
-        });
-        const result = await response.json();
-        if (!response.ok || result.status !== "ready") throw new Error(result.error || "Text enhancement failed.");
-        state.promptEnhancerSettings = enhancerSettings(result.settings || settings);
+        if (!clipStatus.clip_available) {
+          throw new Error(clipSocketConnected()
+            ? "The CLIP input is connected, but ComfyUI has not loaded it into this node yet. Run the workflow and wait for it to finish, then try Generate again."
+            : "Connect a CLIP encoder to this node, run the workflow once, and wait for it to finish before generating text.");
+        }
+        const context = buildEnhancementContext();
+        startEnhancerProgress();
+        progressStarted = true;
         let applied = 0, skipped = 0;
-        for (const field of filled) {
+        for (const [index, field] of filled.entries()) {
+          $(".mb-translation-status").textContent = filled.length === 1 ? "Generating for one field…" : `Generating field ${index + 1} of ${filled.length}…`;
+          animateEnhancerFieldProgress(index, filled.length, field);
+          const response = await fetch(enhancerUrl("run"), {
+            method: "POST", credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ node_id: String(node.id), segments: [{ id: field.id, type: field.type, text: field.text }], context, settings }),
+          });
+          const result = await response.json();
+          if (!response.ok || result.status !== "ready") throw new Error(result.error || "Text enhancement failed.");
+          state.promptEnhancerSettings = enhancerSettings(result.settings || settings);
           const value = result.values?.[field.id];
-          if (typeof value !== "string" || !value.trim()) continue;
-          if (field.current() !== field.text) { skipped++; continue; }
-          field.apply(value);
-          applied++;
+          if (typeof value === "string" && value.trim()) {
+            if (field.current() !== field.text) skipped++;
+            else { field.apply(value); applied++; }
+          }
+          if (linkedInput(node, "layout_text") && state.lastLayoutInputHash) {
+            state.suppressLayoutInput = true;
+            state.suppressLayoutHash = state.lastLayoutInputHash;
+          }
+          sourceSummary = summary.value;
+          sourceMeta = meta.value;
+          syncWidgets();
+          renderSidebar();
+          draw();
+          completeEnhancerFieldProgress(index, filled.length);
         }
-        if (linkedInput(node, "layout_text") && state.lastLayoutInputHash) {
-          state.suppressLayoutInput = true;
-          state.suppressLayoutHash = state.lastLayoutInputHash;
-        }
-        sourceSummary = summary.value;
-        sourceMeta = meta.value;
-        syncWidgets();
-        renderSidebar();
-        draw();
+        generationSucceeded = true;
         $(".mb-translation-status").textContent = skipped ? `Generated ${applied}; skipped ${skipped} changed field(s)` : `Generated text for ${applied} field${applied === 1 ? "" : "s"}`;
       } catch (error) {
         $(".mb-translation-status").textContent = error.message || String(error);
       } finally {
+        if (progressStarted) finishEnhancerProgress(generationSucceeded);
         enhancerBusy = false;
         buttons.forEach((entry) => { entry.disabled = false; });
         if (button) button.disabled = false;
@@ -708,7 +763,9 @@ app.registerExtension({
         if (!response.ok) throw new Error(options.error || "Could not check the connected CLIP input.");
         dialog.querySelector(".mb-enhancer-clip-status").textContent = options.clip_available
           ? `Connected CLIP: ${options.clip_name}`
-          : "No CLIP encoder is available yet. Connect CLIP to this node, then run the workflow once.";
+          : clipSocketConnected()
+            ? "CLIP is connected, but its model object is not cached yet. Run the workflow and wait for it to finish."
+            : "No CLIP input is connected. Connect a CLIP encoder, then run the workflow once.";
         if (!promptField.value && options.default_system_prompt) promptField.value = options.default_system_prompt;
       } catch (error) {
         dialog.querySelector(".mb-enhancer-error").textContent = error.message || String(error);
@@ -1341,11 +1398,24 @@ app.registerExtension({
     root.querySelectorAll(".mb-enhancer-settings").forEach((button) => button.addEventListener("click",openEnhancerSettings));
     const originalOnRemoved = node.onRemoved;
     node.onRemoved = function (...args) {
-      fetch(enhancerUrl("release"), {
-        method: "POST", credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ node_id: String(node.id) }),
-      }).catch(() => {});
+      clearInterval(enhancerProgressTimer);
+      clearTimeout(enhancerProgressHideTimer);
+      const removedNodeId = String(node.id);
+      // ComfyUI can tear down and rebuild frontend node instances while loading
+      // or replacing a workflow. Delay release so a replacement with the same
+      // workflow ID keeps the backend CLIP reference it relies on.
+      setTimeout(() => {
+        const graph = app.graph || app.rootGraph;
+        const graphNodes = graph?._nodes || graph?.nodes;
+        const replacementExists = Array.isArray(graphNodes)
+          && graphNodes.some((entry) => String(entry.id) === removedNodeId);
+        if (replacementExists) return;
+        fetch(enhancerUrl("release"), {
+          method: "POST", credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ node_id: removedNodeId }),
+        }).catch(() => {});
+      }, 1500);
       return originalOnRemoved?.apply(this, args);
     };
     $(".mb-enhance-field[data-enhance-target='summary']").addEventListener("click", (event) => enhanceFields([{
