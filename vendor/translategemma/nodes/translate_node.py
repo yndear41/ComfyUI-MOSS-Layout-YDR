@@ -258,6 +258,29 @@ def _build_end_of_turn_stopping_criteria(tokenizer, prompt_len: int, min_gen: in
     )
 
 
+def _build_action_progress_stopping_criteria(prompt_len: int, max_new_tokens: int,
+                                             progress_callback=None, interrupt_check=None):
+    """Report generated tokens and honor an optional host interruption callback."""
+    if progress_callback is None and interrupt_check is None:
+        return None
+    try:
+        from transformers import StoppingCriteria, StoppingCriteriaList
+    except Exception:
+        return None
+
+    class _ActionProgress(StoppingCriteria):
+        def __call__(self, input_ids, scores, **kwargs):
+            if interrupt_check is not None:
+                interrupt_check()
+            if input_ids is not None and input_ids.numel() > 0 and progress_callback is not None:
+                ids = input_ids[0] if input_ids.dim() == 2 else input_ids
+                generated = max(0, int(ids.shape[0]) - int(prompt_len))
+                progress_callback(min(generated, int(max_new_tokens)), int(max_new_tokens))
+            return False
+
+    return StoppingCriteriaList([_ActionProgress()])
+
+
 class TranslateGemmaNode:
     """
     ComfyUI node for translating text using TranslateGemma models.
@@ -613,6 +636,8 @@ class TranslateGemmaNode:
         quantization: str = "none",  # TG-014
         _retry_plain_on_empty: bool = True,
         _eot_relaxed_retry: bool = False,
+        progress_callback=None,
+        interrupt_check=None,
     ) -> tuple[str]:
         """
         Translate text to target language using TranslateGemma.
@@ -1069,6 +1094,17 @@ class TranslateGemmaNode:
                             stopping_criteria = eot_criteria
                         else:
                             stopping_criteria.extend(eot_criteria)
+                action_progress_criteria = _build_action_progress_stopping_criteria(
+                    prompt_len=int(inputs["input_ids"].shape[1]),
+                    max_new_tokens=int(limits["effective_max_new_tokens"]),
+                    progress_callback=progress_callback,
+                    interrupt_check=interrupt_check,
+                )
+                if action_progress_criteria is not None:
+                    if stopping_criteria is None:
+                        stopping_criteria = action_progress_criteria
+                    else:
+                        stopping_criteria.extend(action_progress_criteria)
                 if stopping_criteria is not None:
                     gen_kwargs["stopping_criteria"] = stopping_criteria
 
@@ -1146,6 +1182,8 @@ class TranslateGemmaNode:
                             quantization=quantization,  # TG-014
                             _retry_plain_on_empty=True,
                             _eot_relaxed_retry=True,
+                            progress_callback=progress_callback,
+                            interrupt_check=interrupt_check,
                         )
                     print(
                         "[TranslateGemma] WARNING: Model returned empty output "
@@ -1175,6 +1213,8 @@ class TranslateGemmaNode:
                         quantization=quantization,  # TG-014
                         _retry_plain_on_empty=False,
                         _eot_relaxed_retry=False,
+                        progress_callback=progress_callback,
+                        interrupt_check=interrupt_check,
                     )
                 if mode == PromptMode.STRUCTURED:
                     return (

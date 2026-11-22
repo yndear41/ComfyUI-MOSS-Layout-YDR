@@ -1,11 +1,31 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
+- Bring the experimental editor into the main package. Workflows saved with either node type continue to open.
+- Keep the text action buttons available while jobs run. Queue multiple jobs and apply their results in submission order.
+- Add AI-assisted box geometry editing with an optional visual reference and a dedicated, editable system prompt.
+- Expose a dedicated system prompt for targeted text edits and require English output for Edit.
+- Show the active field on the native queue surfaces and the rgthree progress bar.
+
+- Let Edit combine keyword matches and manually selected fields, and select all filled fields when neither is specified.
+- Show the System Prompt first and expose the shared Summary, Summary Metadata, and box-type prompts in Text Generation Settings.
+- Allow the tokenizer's Jinja chat template on any compatible encoder, with a separate ComfyUI fallback setting.
+
+- Show the current text action and field next to the native ComfyUI queue progress.
+
+- Send text progress to ComfyUI's native progress bar and deliver text results through the execution event, with history as a fallback.
+
+- Queue Generate, Edit, and Translate as separate ComfyUI jobs with progress and cancellation, while keeping the progress ring and current field in the editor.
+- Give Generate and Edit private instructions for the target field, including the difference between whole-image metadata tags and the contents of a box.
+
+- Strengthen the built-in system and per-field instructions so Generate and Edit produce a meaningful rewrite, migrate saved copies of the previous built-in system prompt, and keep custom system instructions active even when chat-template rendering is disabled.
+- Show whether the connected Qwen 3.5 tokenizer exposes its Jinja template, clarify that only the On/Off reasoning block is controlled by the template, and describe Low/Medium/High as prompt guidance.
+- Keep field callbacks attached to the current box after a connected layout is re-imported, report unchanged or missing model results instead of implying that text changed, and surface TranslateGemma's returned error messages instead of inserting them into prompt fields.
+- Render box outlines and captions with partial transparency so the preview remains visible beneath them.
 - Add in-node prompt enhancement buttons for individual text fields and all filled fields, using ComfyUI's native Generate Text engine.
 - Reuse the CLIP model connected to the node through one shared input; keep one generation settings panel and save its settings and system prompt in the workflow without changing box geometry or labels.
 - Migrate saved node socket layouts by adding the CLIP input and removing obsolete translated outputs.
-- Give each text-generation request the full layout as context while keeping edits scoped to the selected field and its bounding box.
 - Fix editor scaling in Legacy nodes by removing the fixed DOM-widget size, keeping a shrinkable minimum, and sizing the board to the node after resize; keep the canvas and right-hand panel clipped to the node bounds in both frontends.
 - Place Advanced editor state inside the scrollable right panel so it stays aligned with the node edge at different sizes.
 - Keep the single maintainer-supplied MOSS workflow as the only example workflow.
@@ -19,16 +39,19 @@
 - Apply imported boxes across Legacy and Node 2.0 execution events.
 - Import connected MOSS Layout JSON into the visual editor, including boxes, text, summary fields, palettes, optional canvas hints, and dimensions; reflect connected size inputs in the controls after execution.
 - Fix workflow restoration so saved boxes, descriptions, palettes, summary fields, sizing controls, and background display settings remain intact after loading and running the node.
-- Add an in-node TranslateGemma menu for summary, metadata, box descriptions, exact text, and tags while preserving layout structure and original workflow fields.
-- Add `translated` and `translated_json` outputs for the complete translated MOSS prompt and JSON document.
+- Add **Translate all**, shared translation settings, and per-field translation icons for summary, metadata, box descriptions, exact text, and tags.
+- Add keyword-targeted Edit: search Summary, metadata, and boxes, then apply one natural-language change request to the matching fields.
 - Vendor the optional TranslateGemma runtime under its MIT license and keep its dependencies lazy-loaded.
 - Improve megapixel sizing by selecting dimension pairs aligned to the MOSS 16-pixel multiple.
-- Keep box selection, movement, resizing, creation, and deletion available while the translated text view is active.
-- Add a saved Auto on run switch that translates changed layout text during workflow execution and reuses an unchanged translation.
-- Allow independent edits to translated summary, metadata, box descriptions, exact text, and tags without changing the source text.
-- Replace prompt text directly after manual or automatic translation; remove the original/translated view, cached translation state, and duplicate translated output sockets.
+- Replace prompt text directly after a manual translation; the translated text remains editable and is saved with the workflow.
 - Keep the connected CLIP reference alive when ComfyUI rebuilds a node during workflow restoration, and log CLIP cache failures with the affected node ID.
 - Clarify that the summary and all bounding-box descriptions are context for the same image during prompt enhancement.
+- Add a shared three-position context slider for prompt generation and Edit: target field only, Summary and metadata, or the full layout.
+- Add shared Off / Low / Medium / High reasoning guidance for prompt generation and Edit; Off disables thinking, while the other levels guide the model through the prompt.
+- Keep the context slider visible beside the generation settings button and replace field translation glyphs with a language-card icon.
+- Set fresh text-generation settings to a 1,024-token limit, explain when MTP can help, and report when thinking may have consumed the output budget before a final field was returned.
+- Process Translate all and individual field translations sequentially inside the node, and preserve the last Edit search terms and change request in the workflow.
+- Keep ordinary image-generation runs from starting text generation or translation inside the node.
 
 ## 0.1.0 — Initial release
 
@@ -37,4 +60,3 @@
 - Support ComfyUI Legacy and Node 2.0 frontends.
 - Add background preview handling, aspect-ratio and megapixel sizing, color palettes, and text/JSON import.
 - Include GPL-3.0-only licensing and attribution for visual-editor patterns shared by Deno2026.
-

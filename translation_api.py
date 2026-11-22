@@ -2,10 +2,7 @@
 """Local TranslateGemma API for translating editable MOSS layout text."""
 
 import asyncio
-import hashlib
-import json
 import re
-import uuid
 
 
 MAX_SEGMENTS = 512
@@ -14,47 +11,8 @@ MAX_TOTAL_CHARS = 100000
 SEGMENT_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 
 
-def _canonical(value):
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
-
-def _fingerprint(segments, settings):
-    relevant_settings = {
-        key: settings.get(key)
-        for key in (
-            "source_language", "target_language", "model_size", "device", "prompt_mode",
-            "max_new_tokens", "max_input_tokens", "quantization",
-        )
-    }
-    return hashlib.sha256(_canonical({"segments": segments, "settings": relevant_settings}).encode("utf-8")).hexdigest()
-
-
-def source_key(segments, settings):
-    """Compact cross-language key used to reject stale saved translations."""
-    relevant_settings = {
-        key: settings.get(key)
-        for key in (
-            "device", "max_input_tokens", "max_new_tokens", "model_size", "prompt_mode",
-            "quantization", "source_language", "target_language",
-        )
-    }
-    payload = _canonical({"segments": segments, "settings": relevant_settings})
-    value = 0xCBF29CE484222325
-    prime = 0x100000001B3
-    for character in payload:
-        codepoint = ord(character)
-        units = (codepoint,) if codepoint <= 0xFFFF else (
-            0xD800 + ((codepoint - 0x10000) >> 10),
-            0xDC00 + ((codepoint - 0x10000) & 0x3FF),
-        )
-        for unit in units:
-            for byte in (unit & 0xFF, unit >> 8):
-                value = ((value ^ byte) * prime) & 0xFFFFFFFFFFFFFFFF
-    return f"{value:016x}"
-
-
-def translate_segments(segments, settings):
-    """Translate all authored text in one model call and map it back by stable IDs."""
+def translate_segments(segments, settings, *, progress=None, interrupt_check=None):
+    """Translate authored fields one at a time, in their original order."""
     if not isinstance(segments, list) or not segments or len(segments) > MAX_SEGMENTS:
         raise ValueError(f"Translation requires 1–{MAX_SEGMENTS} text segments.")
     if not isinstance(settings, dict):
@@ -76,7 +34,10 @@ def translate_segments(segments, settings):
         seen.add(segment_id)
         total += len(value)
         if value.strip():
-            clean_segments.append({"id": segment_id, "text": value})
+            clean_segments.append({
+                "id": segment_id,
+                "text": value,
+            })
     if total > MAX_TOTAL_CHARS:
         raise ValueError(f"The layout text is longer than {MAX_TOTAL_CHARS} characters.")
     if not clean_segments:
@@ -107,16 +68,6 @@ def translate_segments(segments, settings):
     except (TypeError, ValueError):
         max_new_tokens, max_input_tokens = 0, 0
 
-    nonce = uuid.uuid4().hex[:16]
-    markers = {}
-    blocks = []
-    for index, segment in enumerate(clean_segments):
-        start = f"[[YDR_{nonce}_{index:04d}_BEGIN]]"
-        end = f"[[YDR_{nonce}_{index:04d}_END]]"
-        markers[segment["id"]] = (start, end)
-        blocks.append(f"{start}\n{segment['text']}\n{end}")
-    payload = "\n\n".join(blocks)
-
     # Import only on demand so the layout node remains usable without translation
     # dependencies or model weights installed.
     try:
@@ -126,42 +77,56 @@ def translate_segments(segments, settings):
             "TranslateGemma is unavailable. Install requirements-translategemma.txt in the ComfyUI Python environment."
         ) from exc
 
-    try:
-        translated = TranslateGemmaNode()._translate_one(
-            text=payload,
-            target_language=target_language,
-            model_size=model_size,
-            device=device,
-            source_language=source_language,
-            prompt_mode=prompt_mode,
-            max_new_tokens=max_new_tokens,
-            max_input_tokens=max_input_tokens,
-            truncate_input=False,
-            strict_context_limit=True,
-            keep_model_loaded=bool(settings.get("keep_model_loaded", True)),
-            debug=False,
-            chinese_conversion_only=False,
-            long_text_strategy="disable",
-            quantization=quantization,
-        )[0]
-    except Exception as exc:
-        message = str(exc).strip() or exc.__class__.__name__
-        raise RuntimeError(f"TranslateGemma failed: {message}") from exc
-
+    translator = TranslateGemmaNode()
     values = {}
-    for segment_id, (start, end) in markers.items():
-        pattern = re.compile(re.escape(start) + r"\s*(.*?)\s*" + re.escape(end), re.DOTALL)
-        matches = pattern.findall(translated)
-        if len(matches) != 1:
+    total = len(clean_segments)
+    for index, segment in enumerate(clean_segments, start=1):
+        field_id = segment["id"]
+        if interrupt_check is not None:
+            interrupt_check()
+
+        def token_update(tokens, limit):
+            progress(field_id, index, total, tokens, limit)
+
+        if progress is not None:
+            progress(field_id, index, total)
+        try:
+            translated = translator._translate_one(
+                text=segment["text"],
+                target_language=target_language,
+                model_size=model_size,
+                device=device,
+                source_language=source_language,
+                prompt_mode=prompt_mode,
+                max_new_tokens=max_new_tokens,
+                max_input_tokens=max_input_tokens,
+                truncate_input=False,
+                strict_context_limit=True,
+                keep_model_loaded=bool(settings.get("keep_model_loaded", True)),
+                debug=False,
+                chinese_conversion_only=False,
+                long_text_strategy="disable",
+                quantization=quantization,
+                progress_callback=token_update if progress is not None else None,
+                interrupt_check=interrupt_check,
+            )[0]
+        except Exception as exc:
+            message = str(exc).strip() or exc.__class__.__name__
+            raise RuntimeError(f"TranslateGemma failed for {segment['id']}: {message}") from exc
+        translated_value = str(translated or "").strip()
+        if not translated_value:
             raise RuntimeError(
-                "TranslateGemma changed or omitted a layout marker. The original layout is unchanged; try a smaller model or fewer text fields."
+                f"TranslateGemma returned an empty value for {segment['id']}. The original layout is unchanged; try again or use a smaller set of fields."
             )
-        translated_value = matches[0]
-        if not translated_value.strip():
+        if translated_value.startswith("[Error:"):
             raise RuntimeError(
-                "TranslateGemma returned an empty value for one of the layout fields. The original layout is unchanged; try again or use a smaller set of fields."
+                f"TranslateGemma could not translate {segment['id']}: {translated_value.strip('[] ')}"
             )
-        values[segment_id] = translated_value
+        values[segment["id"]] = translated_value
+        if interrupt_check is not None:
+            interrupt_check()
+        if progress is not None:
+            progress(field_id, index, total, finished=True)
 
     normalized_settings = {
         "source_language": source_language,
@@ -176,8 +141,6 @@ def translate_segments(segments, settings):
     }
     return {
         "status": "ready",
-        "signature": _fingerprint(clean_segments, normalized_settings),
-        "source_key": source_key(clean_segments, normalized_settings),
         "values": values,
         "settings": normalized_settings,
     }
@@ -214,9 +177,15 @@ def register_routes():
                 raise web.HTTPRequestEntityTooLarge(max_size=1_000_000, actual_size=request.content_length)
             try:
                 body = await request.json()
-                result = await asyncio.to_thread(
-                    translate_segments, body.get("segments"), body.get("settings", {})
-                )
+                def run(progress=None):
+                    return translate_segments(
+                        body.get("segments"), body.get("settings", {}), progress=progress
+                    )
+
+                from .local_text_progress import STREAM_TYPE, stream_text_action
+                if request.headers.get("Accept") == STREAM_TYPE:
+                    return await stream_text_action(request, run)
+                result = await asyncio.to_thread(run)
                 return web.json_response(result)
             except ValueError as exc:
                 return web.json_response({"status": "error", "error": str(exc)}, status=400)

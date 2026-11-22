@@ -3,10 +3,24 @@
 // (https://github.com/Deno2026/comfyui-deno-custom-nodes), under GPL-3.0-only.
 // This frontend has been modified for MOSS-Image layout composition.
 import { app } from "/scripts/app.js";
+import { queueTextAction } from "./text_action_queue.js";
 
 const WIDGET = "moss_layout_editor";
+const NODE_TYPES = new Set(["MOSSLayoutComposer", "MOSSLayoutComposerExperimental"]);
+const NODE_TITLE = "MOSS Layout YDR";
+const LEGACY_NODE_TITLES = new Set([...NODE_TYPES, NODE_TITLE, "MOSS Layout YDR Experimental", "MOSS Layout YDR (Experimental)"]);
 const CW = 1000, CH = 1000;
 const TYPE_NAME = { object: "Object", character: "Character", text: "Text" };
+const TRANSLATE_ICON = '<svg class="mb-translate-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 2.8h10.2a3 3 0 0 1 3 3v5.8a3 3 0 0 1-3 3H8l-3.3 2.7v-2.7h-1a3 3 0 0 1-3-3V5.8a3 3 0 0 1 2.8-3Z"/><path d="M10.8 9.4h9.7a3 3 0 0 1 3 3v5.8a3 3 0 0 1-3 3h-2.2v2l-3.1-2h-4.4a3 3 0 0 1-3-3"/><text x="5.7" y="10.9">A</text><text x="15.1" y="18.8">文</text></svg>';
+const CONTEXT_MODES = ["none", "summary", "full"];
+const CONTEXT_LABELS = ["None", "Summary", "Full"];
+const FIELD_PROMPT_LABELS = {
+  summary: "Summary",
+  summary_meta: "Summary Metadata",
+  bbox_character: "Character BBox",
+  bbox_object: "Object BBox",
+  bbox_text: "Text BBox",
+};
 let activeLayoutDelete = null;
 const keyGuardedCanvases = new WeakMap();
 
@@ -300,7 +314,11 @@ app.registerExtension({
     });
   },
   async nodeCreated(node) {
-    if (node.comfyClass !== "MOSSLayoutComposer" && node.type !== "MOSSLayoutComposer") return;
+    if (!NODE_TYPES.has(node.comfyClass) && !NODE_TYPES.has(node.type)) return;
+    const updateDefaultTitle = () => {
+      if (!node.title || LEGACY_NODE_TITLES.has(node.title)) node.title = NODE_TITLE;
+    };
+    updateDefaultTitle();
     // Existing workflow JSON stores socket lists on each node. Migrate old
     // saved instances to the current backend schema when ComfyUI restores them.
     for (let index = (node.outputs?.length || 0) - 1; index >= 0; index--) {
@@ -340,11 +358,11 @@ app.registerExtension({
       <div class="mb-main">
         <div class="mb-canvas-wrap"><canvas class="mb-canvas" width="${CW}" height="${CH}" tabindex="0" aria-label="Layout canvas"></canvas><div class="mb-empty">Draw a region by dragging on the canvas</div></div>
         <aside class="mb-prompt">
-          <div class="mb-translation-row"><button class="mb-translate-open" type="button" title="Translate and replace all prompt text locally with TranslateGemma">Translate & replace…</button><label class="mb-auto-translate-label" title="Translate and replace current prompt text on every workflow run"><input class="mb-auto-translate" type="checkbox">Auto on run</label></div>
-          <div class="mb-translation-row mb-enhancer-row"><button class="mb-enhance-all" type="button" title="Generate improved text for every filled field with the CLIP encoder connected to this node">Generate all</button><button class="mb-enhancer-settings" type="button" title="Edit shared text generation settings" aria-label="Text generation settings">⚙</button><span class="mb-enhancer-progress" role="progressbar" aria-label="Prompt generation progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><svg viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="${progressGradientId}" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#f0b2cc"/><stop offset="52%" stop-color="#9f456e"/><stop offset="100%" stop-color="#76539b"/></linearGradient></defs><circle class="mb-progress-track" cx="12" cy="12" r="9"/><circle class="mb-progress-value" cx="12" cy="12" r="9" stroke="url(#${progressGradientId})"/></svg></span><span class="mb-translation-status" aria-live="polite">Prompt ready</span></div>
-          <div class="mb-field-head"><label title="Describe the complete image: scene, composition, lighting, style, and visual relationships.">Summary <span class="mb-info" tabindex="0" data-help="Describe the whole image in natural language: scene, composition, lighting, style, and how the elements relate. Keep box-specific appearance in each box description.">i</span></label><div class="mb-field-actions"><button class="mb-enhance-field" data-enhance-target="summary" type="button" title="Generate improved text for only the summary field">Generate</button></div></div>
+          <div class="mb-translation-row"><button class="mb-translate-all" type="button" title="Translate and replace all filled prompt fields">Translate all</button><button class="mb-translate-settings" type="button" title="Edit shared translation settings" aria-label="Translation settings">⚙</button></div>
+          <div class="mb-translation-row mb-enhancer-row"><button class="mb-enhance-all" type="button" title="Generate improved text for every filled field with the CLIP encoder connected to this node">Generate all</button><button class="mb-edit-matching" type="button" title="Edit filled fields using keyword matches, manual selections, or all fields">Edit</button><button class="mb-enhancer-settings" type="button" title="Edit shared text generation settings" aria-label="Text generation settings">⚙</button><div class="mb-inline-context" title="No context sends only the target field; Summary adds caption and metadata; Full layout adds all boxes and coordinates."><span class="mb-inline-context-title">Context</span><input class="mb-context-slider" type="range" min="0" max="2" step="1" value="2" aria-label="Generation context"><span class="mb-inline-context-value">Full</span></div><span class="mb-enhancer-progress" role="progressbar" aria-label="Text action progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><svg viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="${progressGradientId}" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#f0b2cc"/><stop offset="52%" stop-color="#9f456e"/><stop offset="100%" stop-color="#76539b"/></linearGradient></defs><circle class="mb-progress-track" cx="12" cy="12" r="9"/><circle class="mb-progress-value" cx="12" cy="12" r="9" stroke="url(#${progressGradientId})"/></svg></span><span class="mb-translation-status" aria-live="polite">Prompt ready</span></div>
+          <div class="mb-field-head"><label title="Describe the complete image: scene, composition, lighting, style, and visual relationships.">Summary <span class="mb-info" tabindex="0" data-help="Describe the whole image in natural language: scene, composition, lighting, style, and how the elements relate. Keep box-specific appearance in each box description.">i</span></label><div class="mb-field-actions"><button class="mb-translate-field" data-translate-target="summary" type="button" aria-label="Translate summary" title="Translate only the summary field">${TRANSLATE_ICON}</button><button class="mb-enhance-field" data-enhance-target="summary" type="button" title="Generate improved text for only the summary field">Generate</button></div></div>
           <textarea class="mb-summary" placeholder="Describe the whole image: scene, composition, lighting, and style…" title="Global description of the whole image"></textarea>
-          <div class="mb-field-head"><label title="Optional comma-separated medium or genre tags supported by MOSS-Image.">Summary metadata <span class="mb-info" tabindex="0" data-help="Optional MOSS-Image summary tags such as 'editorial photography, product campaign'. This becomes summary.meta in the JSON. Leave blank if you do not need tags.">i</span></label><div class="mb-field-actions"><button class="mb-enhance-field" data-enhance-target="meta" type="button" title="Generate improved tags for only the summary metadata">Generate</button></div></div>
+          <div class="mb-field-head"><label title="Optional comma-separated medium or genre tags supported by MOSS-Image.">Summary metadata <span class="mb-info" tabindex="0" data-help="Optional MOSS-Image summary tags such as 'editorial photography, product campaign'. This becomes summary.meta in the JSON. Leave blank if you do not need tags.">i</span></label><div class="mb-field-actions"><button class="mb-translate-field" data-translate-target="meta" type="button" aria-label="Translate summary metadata" title="Translate summary metadata">${TRANSLATE_ICON}</button><button class="mb-enhance-field" data-enhance-target="meta" type="button" title="Generate improved tags for only the summary metadata">Generate</button></div></div>
           <textarea class="mb-meta" placeholder="Optional tags, e.g. editorial photography, product campaign" title="Optional medium or genre tags, separated by commas"></textarea>
           <label title="Optional MOSS summary.canvas hint. It is not required; it can suggest a single image, multi-panel layout, or collage.">Composition layout</label>
           <select class="mb-canvas-type" title="Optional MOSS summary.canvas hint; leave unspecified unless the composition structure matters"><option value="">Not specified</option><option value="single">Single image</option><option value="multi_panel">Multi-panel</option><option value="collage">Collage</option></select>
@@ -360,8 +378,8 @@ app.registerExtension({
       .mb-swap{width:31px;height:31px;padding:5px;flex:0 0 31px;background:#1b2022;border:1px solid var(--line);border-radius:7px;color:#c0c9cb;cursor:pointer}.mb-swap:hover{color:var(--accent);border-color:rgba(158,175,180,.45)}.mb-swap svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:1.65;stroke-linecap:round;stroke-linejoin:round}
       .mb-size-row{display:flex;align-items:center;gap:6px;min-height:30px}.mb-size-group{display:flex;align-items:center;gap:6px;flex:1;min-width:0}.mb-size-group label{flex:0 0 auto}.mb-size-group input{flex:1;width:auto;min-width:42px}.mb-size-group span,.mb-mp-row>span{color:var(--muted)}.mb-bg-controls{display:flex;align-items:center;gap:4px;flex:0 0 auto}.mb-bg-opacity{width:74px;height:16px;padding:0!important;accent-color:#9eafb4}.mb-bg-opacity-label{width:31px;text-align:right;color:var(--muted);font-size:10px}.mb-bg-eye{display:grid;place-items:center;width:27px;height:27px;padding:4px;background:#1b2022;border:1px solid var(--line);border-radius:6px;color:#c0c9cb;cursor:pointer}.mb-bg-eye:hover{color:var(--accent);border-color:rgba(158,175,180,.45)}.mb-bg-eye svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}.mb-eye-slash{display:none}.mb-bg-eye.is-hidden .mb-eye-shape{opacity:.45}.mb-bg-eye.is-hidden .mb-eye-slash{display:block}.mb-mp-row select{flex:1;min-width:0}.mb-mp-row input{width:68px}.mb-clear-all{flex:0 0 auto;background:#1d2325;color:#cbd4d7;border:1px solid var(--line);border-radius:6px;padding:5px 7px;cursor:pointer;font:inherit}.mb-clear-all:hover{border-color:rgba(158,175,180,.45);color:#fff}
       .mb-main{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(170px,1fr);gap:9px;min-height:300px;align-items:start}.mb-canvas-wrap{position:relative;min-width:0;width:100%;aspect-ratio:1/1;align-self:start;min-height:0;border:1px solid var(--line);border-radius:7px;background:#0e1214;overflow:hidden;display:grid;place-items:center}.mb-canvas{display:block;width:100%;height:100%;aspect-ratio:1/1;max-height:none;object-fit:fill;touch-action:none;cursor:crosshair}.mb-empty{position:absolute;pointer-events:none;opacity:.35;color:#b9c2c4;font-size:11px}.mb-prompt{display:flex;flex-direction:column;gap:5px;min-width:0}.mb-prompt textarea{width:100%;resize:vertical}.mb-summary{flex:1;min-height:130px}.mb-meta{min-height:60px}.mb-info{display:inline-grid;place-items:center;border:1px solid rgba(255,255,255,.25);border-radius:50%;width:14px;height:14px;font:italic 11px Georgia;color:#a5afb2;cursor:help}.mb-preview-note{font-size:10px;color:#899498;margin-top:auto}.mb-advanced{display:flex;flex-direction:column;gap:5px}.mb-state-toggle{align-self:flex-start;background:none;border:0;color:#8f999c;font:10px inherit;cursor:pointer;padding:2px}.mb-state{display:none;width:100%;height:70px;resize:vertical;font:10px monospace!important}.mb-state.open{display:block}
-      .mb-modal-shade{position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.52);display:grid;place-items:center}.mb-modal{position:relative;width:min(420px,calc(100vw - 28px));max-height:calc(100vh - 28px);overflow:auto;background:#14191b;border:1px solid rgba(255,255,255,.12);border-radius:10px;box-shadow:0 14px 44px #0009;padding:14px;color:#d3d8da;font:12px/1.45 "Segoe UI",system-ui,sans-serif}.mb-modal h3{margin:0 30px 9px 0;font-size:14px;font-weight:600}.mb-modal label{display:block;color:#b5bec1;margin:10px 0 4px}.mb-modal select,.mb-modal input,.mb-modal textarea{width:100%;background:#1b2022;color:#d3d8da;border:1px solid rgba(255,255,255,.12);border-radius:6px;padding:7px;font:inherit}.mb-modal textarea{min-height:70px;resize:vertical}.mb-modal .mb-exact{min-height:56px}.mb-modal .mb-modal-help{color:#8e999c;font-size:10px;margin-top:4px}.mb-modal .mb-modal-buttons{display:flex;justify-content:space-between;gap:7px;margin-top:13px}.mb-modal button{background:#202629;color:#cbd4d7;border:1px solid var(--line);border-radius:6px;padding:6px 10px;cursor:pointer}.mb-modal button.primary{background:linear-gradient(#b2c0c4,#7e9096);color:#111719;border:0;font-weight:600}.mb-modal button.danger{color:#df9696}.mb-modal .mb-modal-close{position:absolute;right:8px;top:7px;width:23px;height:23px;padding:0;display:grid;place-items:center;font-size:19px;line-height:1;background:#242a2c;border:1px solid var(--line);border-radius:5px}.mb-modal .mb-field-actions .mb-enhance-field,.mb-modal .mb-field-actions .mb-enhancer-settings{width:auto;padding:3px 6px;font-size:10px}.mb-modal .mb-field-actions .mb-enhancer-settings{width:24px;padding:3px}
-      .mb-translation-modal .mb-translation-advanced{margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,.08)}.mb-translation-modal .mb-translation-advanced>summary{color:#b5bec1;cursor:pointer}.mb-translation-modal .mb-translation-advanced label:has(.mb-keep-loaded){display:flex;align-items:center;gap:8px}.mb-translation-modal .mb-keep-loaded{width:auto;margin:0}.mb-translation-modal .mb-translation-message{margin-top:10px;color:#8e999c;font-size:10px}.mb-translation-modal .mb-translation-run:disabled{opacity:.55;cursor:wait}
+      .mb-modal-shade{position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.52);display:grid;place-items:center}.mb-modal{position:relative;width:min(420px,calc(100vw - 28px));max-height:calc(100vh - 28px);overflow:auto;background:#14191b;border:1px solid rgba(255,255,255,.12);border-radius:10px;box-shadow:0 14px 44px #0009;padding:14px;color:#d3d8da;font:12px/1.45 "Segoe UI",system-ui,sans-serif}.mb-modal h3{margin:0 30px 9px 0;font-size:14px;font-weight:600}.mb-modal label{display:block;color:#b5bec1;margin:10px 0 4px}.mb-modal select,.mb-modal input,.mb-modal textarea{width:100%;background:#1b2022;color:#d3d8da;border:1px solid rgba(255,255,255,.12);border-radius:6px;padding:7px;font:inherit}.mb-modal textarea{min-height:70px;resize:vertical}.mb-modal .mb-exact{min-height:56px}.mb-modal .mb-modal-help{color:#8e999c;font-size:10px;margin-top:4px}.mb-modal .mb-modal-buttons{display:flex;justify-content:space-between;gap:7px;margin-top:13px}.mb-modal button{background:#202629;color:#cbd4d7;border:1px solid var(--line);border-radius:6px;padding:6px 10px;cursor:pointer}.mb-modal button.primary{background:linear-gradient(#b2c0c4,#7e9096);color:#111719;border:0;font-weight:600}.mb-modal button.danger{color:#df9696}.mb-modal .mb-modal-close{position:absolute;right:8px;top:7px;width:23px;height:23px;padding:0;display:grid;place-items:center;font-size:19px;line-height:1;background:#242a2c;border:1px solid var(--line);border-radius:5px}.mb-modal .mb-field-actions .mb-enhance-field,.mb-modal .mb-field-actions .mb-enhancer-settings{width:auto;padding:3px 6px;font-size:10px}.mb-modal .mb-field-actions .mb-enhancer-settings{width:24px;padding:3px}.mb-modal .mb-field-actions .mb-translate-field{width:22px;height:22px;padding:0;font-size:15px}
+      .mb-translation-modal .mb-translation-advanced{margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,.08)}.mb-translation-modal .mb-translation-advanced>summary{color:#b5bec1;cursor:pointer}.mb-translation-modal .mb-translation-advanced label:has(.mb-keep-loaded){display:flex;align-items:center;gap:8px}.mb-translation-modal .mb-keep-loaded{width:auto;margin:0}.mb-translation-modal .mb-translation-message{margin-top:10px;color:#8e999c;font-size:10px}
       .mb-help-pop{position:fixed;z-index:100000;max-width:260px;padding:8px 10px;background:#252b2f;border:1px solid rgba(255,255,255,.13);border-radius:7px;color:#d3d8da;font:11px/1.45 "Segoe UI",system-ui,sans-serif;box-shadow:0 6px 20px #0008;pointer-events:none}
       .mb-prompt{max-height:460px;overflow:auto;padding-right:3px}.mb-palette-tools{display:flex;align-items:center;gap:6px}.mb-palette-tools button{background:#1d2325;color:#cbd4d7;border:1px solid var(--line);border-radius:6px;padding:5px 8px;cursor:pointer;font:inherit}.mb-palette-list{display:flex;flex-wrap:wrap;gap:4px}.mb-color-chip{display:inline-flex;align-items:center;gap:3px}.mb-color-chip input[type=color]{padding:2px;width:22px;height:20px;cursor:pointer}.mb-color-chip button{border:0;background:transparent;color:#b5bec1;cursor:pointer;padding:0 3px}.mb-elements{display:flex;flex-direction:column;gap:4px;max-height:120px;overflow:auto}.mb-element{border:1px solid var(--line);background:#1d2325;color:#cbd4d7;border-radius:5px;padding:5px 7px;text-align:left;cursor:pointer;font:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mb-element.selected{border-color:var(--accent);color:#fff}
       .mb-color-popover{position:fixed;z-index:100001;width:250px;padding:12px;background:#171d1f;border:1px solid rgba(255,255,255,.18);border-radius:8px;box-shadow:0 8px 28px #000a;color:#d4dadd;font:12px/1.4 "Segoe UI",system-ui,sans-serif;display:grid;grid-template-columns:1fr;gap:8px;align-items:center}.mb-color-popover label{margin:0;color:#b5bec1;padding-right:24px}.mb-picker-plane{position:relative;width:100%;height:118px;border:1px solid #ffffff35;border-radius:5px;background-image:linear-gradient(to top,#000,transparent),linear-gradient(to right,#fff,transparent);cursor:crosshair;touch-action:none}.mb-picker-handle{position:absolute;width:12px;height:12px;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 4px #000;transform:translate(-50%,-50%);pointer-events:none}.mb-picker-hue-row{display:flex;align-items:center;gap:8px;color:#aeb8bb;font-size:10px}.mb-picker-hue{width:100%;height:13px;margin:0;padding:0!important;appearance:none;border:0!important;border-radius:8px;background:linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)!important}.mb-picker-hue::-webkit-slider-thumb{appearance:none;width:13px;height:13px;border:2px solid #fff;border-radius:50%;background:#272c2e}.mb-picker-value-row{display:grid;grid-template-columns:24px minmax(0,1fr) auto;gap:7px;align-items:center}.mb-picker-preview{width:24px;height:24px;border:1px solid #ffffff50;border-radius:5px}.mb-color-popover .mb-picker-hex{width:100%;height:30px;padding:5px 7px;background:#202629;border:1px solid var(--line);border-radius:5px;color:#e2e8e9;font:11px monospace}.mb-color-popover button{background:#252c2e;color:#d1d7d9;border:1px solid var(--line);border-radius:5px;padding:5px 8px;cursor:pointer;font:inherit}.mb-color-popover .mb-pop-close{position:absolute;right:5px;top:5px;width:20px;height:20px;padding:0;font-size:17px;line-height:1}.mb-recent-colors{display:grid;grid-template-columns:repeat(10,minmax(0,1fr));gap:4px}.mb-color-popover .mb-recent-swatch{width:100%;height:18px;min-width:0;padding:0;border-radius:4px;border:1px solid #ffffff45}.mb-color-popover .mb-recent-swatch.is-empty{background:#242a2c;opacity:.4;cursor:default}.mb-elements{display:flex;flex-direction:column;gap:4px;max-height:120px;overflow:auto}.mb-element{border:1px solid var(--line);background:#1d2325;color:#cbd4d7;border-radius:5px;padding:5px 7px;text-align:left;cursor:pointer;font:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mb-element.selected{border-color:var(--accent);color:#fff}
@@ -374,11 +392,29 @@ app.registerExtension({
       .mb-canvas{position:absolute;inset:0;margin:auto;width:auto;height:auto;max-width:100%;max-height:100%;aspect-ratio:1/1;object-fit:fill}
       .mb-prompt{height:100%;max-height:none;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;align-self:stretch;scrollbar-gutter:stable}
       .mb-summary{flex:0 0 250px;min-height:90px}
+      .mb-edit-targets{display:flex;flex-direction:column;align-items:flex-start;gap:6px;margin-top:8px}
+      .mb-edit-targets>label{margin:0}
+      .mb-edit-picked{display:flex;flex-wrap:wrap;gap:5px;max-height:100px;overflow-y:auto}
+      .mb-edit-picked:empty,.mb-edit-targets select[hidden]{display:none}
+      .mb-edit-picked button{margin:0}
+      .mb-edit-system{margin-top:9px;border-top:1px solid rgba(255,255,255,.08);padding-top:7px}
+      .mb-edit-system>summary{color:#b5bec1;cursor:pointer}
+      .mb-edit-system textarea{display:block;margin:6px 0;min-height:155px}
+      .mb-edit-modes,.mb-geometry-selection{display:flex;align-items:center;gap:6px}
+      .mb-edit-modes{margin-bottom:9px}
+      .mb-edit-modes button[aria-pressed="true"]{background:#354043;color:#edf1f2}
+      .mb-geometry-list{display:grid;gap:3px;max-height:170px;overflow-y:auto;margin-top:6px}
+      .mb-modal label.mb-geometry-choice{display:flex;align-items:center;gap:7px;margin:3px 0}
+      .mb-geometry-choice input[type="checkbox"]{width:auto;margin:0;flex:none}
+      .mb-geometry-choice span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .mb-field-prompt-buttons{display:flex;flex-wrap:wrap;gap:5px;margin:7px 0 10px}
+      .mb-field-prompt-buttons button.is-custom{border-color:var(--accent,#9eafb4)}
+      .mb-field-prompt-modal textarea{min-height:140px}
       .mb-meta{min-height:48px}
       .mb-preview-note{margin-top:4px}
-      .mb-translation-row{display:flex;align-items:center;gap:5px;flex:0 0 auto;margin:2px 0}.mb-translation-row button{background:#1d2325;color:#cbd4d7;border:1px solid var(--line);border-radius:5px;padding:4px 7px;cursor:pointer;font:inherit}.mb-translation-row button:hover:not(:disabled){border-color:rgba(158,175,180,.55);color:#fff}.mb-translation-row button:disabled{opacity:.45;cursor:default}.mb-auto-translate-label{display:flex;align-items:center;gap:3px;white-space:nowrap;cursor:pointer}.mb-auto-translate{width:13px!important;height:13px;padding:0!important;margin:0;accent-color:#9eafb4}.mb-translation-status{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:10px}
+      .mb-translation-row{display:flex;align-items:center;gap:5px;flex:0 0 auto;margin:2px 0}.mb-translation-row button{background:#1d2325;color:#cbd4d7;border:1px solid var(--line);border-radius:5px;padding:4px 7px;cursor:pointer;font:inherit}.mb-translation-row button:hover:not(:disabled){border-color:rgba(158,175,180,.55);color:#fff}.mb-translation-row button:disabled{opacity:.45;cursor:default}.mb-translation-status{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:10px}.mb-enhancer-row{display:flex;align-items:center;gap:5px;flex-wrap:wrap}.mb-inline-context{display:flex;align-items:center;gap:3px;flex:0 1 auto;min-width:0;color:#9ca7aa;font-size:9px;white-space:nowrap}.mb-inline-context-title{color:#9ca7aa}.mb-inline-context-value{min-width:32px;color:#d3d8da}.mb-enhancer-row input.mb-context-slider{width:64px;height:14px;margin:0;padding:0;accent-color:#9f456e;cursor:pointer}
       .mb-enhancer-progress{display:none;align-items:center;justify-content:center;flex:0 0 18px;width:18px;height:18px}.mb-enhancer-progress.is-active{display:inline-flex}.mb-enhancer-progress svg{display:block;width:16px;height:16px;overflow:visible}.mb-progress-track{fill:none;stroke:rgba(255,255,255,.12);stroke-width:2.2}.mb-progress-value{fill:none;stroke-width:2.4;stroke-linecap:round;stroke-dasharray:56.55;stroke-dashoffset:56.55;transform:rotate(-90deg);transform-origin:12px 12px;transition:stroke-dashoffset .14s linear}
-      .mb-field-head{display:flex;align-items:center;justify-content:space-between;gap:6px;min-width:0}.mb-field-head>label{margin:0}.mb-field-actions{display:flex;align-items:center;gap:3px;flex:0 0 auto}.moss-board .mb-enhance-field{flex:0 0 auto;padding:2px 6px;background:#1d2325;color:#bfcacd;border:1px solid var(--line);border-radius:4px;font:inherit;font-size:10px;line-height:1.4;cursor:pointer}.moss-board .mb-enhance-field:hover:not(:disabled){color:#fff;border-color:rgba(158,175,180,.6)}.moss-board .mb-enhance-field:disabled{opacity:.45;cursor:wait}.mb-enhancer-modal{width:min(500px,calc(100vw - 28px))}.mb-enhancer-modal .mb-enhancer-advanced{margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,.08)}.mb-enhancer-modal .mb-enhancer-advanced>summary{color:#b5bec1;cursor:pointer}.mb-enhancer-modal .mb-enhancer-message{margin-top:8px;color:#8e999c;font-size:10px}.mb-enhancer-modal .mb-enhancer-prompt{min-height:110px}.mb-enhancer-modal .mb-enhancer-check{display:flex;align-items:center;gap:8px}.mb-enhancer-modal .mb-enhancer-check input{width:auto;margin:0}
+      .mb-field-head{display:flex;align-items:center;justify-content:space-between;gap:6px;min-width:0}.mb-field-head>label{margin:0}.mb-field-actions{display:flex;align-items:center;gap:3px;flex:0 0 auto}.moss-board .mb-enhance-field{flex:0 0 auto;padding:2px 6px;background:#1d2325;color:#bfcacd;border:1px solid var(--line);border-radius:4px;font:inherit;font-size:10px;line-height:1.4;cursor:pointer}.moss-board .mb-enhance-field:hover:not(:disabled){color:#fff;border-color:rgba(158,175,180,.6)}.moss-board .mb-enhance-field:disabled{opacity:.45;cursor:wait}.moss-board .mb-translate-field{display:inline-grid;place-items:center;flex:0 0 22px;width:22px;height:22px;padding:0;background:#1d2325;color:#bfcacd;border:1px solid var(--line);border-radius:4px;font:15px/1 "Segoe UI Symbol","Segoe UI",sans-serif;cursor:pointer}.moss-board .mb-translate-field:hover:not(:disabled){color:#fff;border-color:rgba(158,175,180,.6)}.moss-board .mb-translate-field:disabled{opacity:.45;cursor:wait}.mb-enhancer-modal{width:min(500px,calc(100vw - 28px))}.mb-enhancer-modal .mb-enhancer-advanced{margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,.08)}.mb-enhancer-modal .mb-enhancer-advanced>summary{color:#b5bec1;cursor:pointer}.mb-enhancer-modal .mb-enhancer-message{margin-top:8px;color:#8e999c;font-size:10px}.mb-enhancer-modal .mb-enhancer-prompt{min-height:110px}.mb-enhancer-modal .mb-enhancer-check{display:flex;align-items:center;gap:8px}.mb-enhancer-modal .mb-enhancer-check input{width:auto;margin:0}.mb-translate-icon{display:block;width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.25;stroke-linecap:round;stroke-linejoin:round}.mb-translate-icon text{fill:currentColor;stroke:none;font:700 5.5px/1 "Segoe UI",sans-serif}
       .mb-advanced{flex:0 0 auto;margin-top:4px}
       .mb-elements{flex:0 0 auto;min-height:0;max-height:130px;overflow-y:auto;overflow-x:hidden}
       .mb-element{flex:0 0 30px;height:30px;min-height:30px;line-height:18px;white-space:nowrap}
@@ -445,14 +481,19 @@ app.registerExtension({
     const canvas = $(".mb-canvas"), ctx = canvas.getContext("2d");
     canvas.title = "Drag to draw a box. Click to select it. Hold Alt and click to cycle through overlapping boxes. Double-click to edit.";
     const ratioSelect = $(".mb-ratio"), wInput = $(".mb-width"), hInput = $(".mb-height");
-    const mpSelect = $(".mb-mp-select"), mpInput = $(".mb-mp"), summary = $(".mb-summary"), meta = $(".mb-meta"), canvasType = $(".mb-canvas-type"), autoTranslateToggle = $(".mb-auto-translate");
+    const mpSelect = $(".mb-mp-select"), mpInput = $(".mb-mp"), summary = $(".mb-summary"), meta = $(".mb-meta"), canvasType = $(".mb-canvas-type");
     const opacitySlider = $(".mb-bg-opacity"), opacityLabel = $(".mb-bg-opacity-label"), eyeButton = $(".mb-bg-eye");
+    const contextSlider = $(".mb-context-slider"), contextValue = $(".mb-inline-context-value");
     const savedState = $(".mb-state"), stateToggle = $(".mb-state-toggle"), emptyHint = $(".mb-empty");
     let state = readState(node), selected = -1, gesture = null, latestPreview = null, showHelp = null, sampleMode = null, previewRect = null;
+    delete state.autoTranslate;
+    delete state.mossQueuedAction;
     let sourceSummary = getValue(node, "summary", ""), sourceMeta = getValue(node, "summary_meta", "");
-    let translationBusy = false, enhancerBusy = false, autoTranslate = state.autoTranslate === true;
-    let enhancerProgressTimer = null, enhancerProgressHideTimer = null;
-    autoTranslateToggle.checked = autoTranslate;
+    const pendingActions = new Set();
+    let lastAction = Promise.resolve(), runningAction, openBoxTextEditor;
+    const defaultActionPrompts = {};
+    let activeOperationStatus = "";
+    let enhancerProgressHideTimer = null;
     let landscapeOrientation = state.orientation ? state.orientation === "landscape" : Boolean(getValue(node, "portrait", false));
     const boxUiColors = new WeakMap();
     let altPickCycle = null;
@@ -513,16 +554,42 @@ app.registerExtension({
       return fitDimensions(r, mp, fitImageMegapixels);
     }
     function sourceMetaParts(value = sourceMeta) { return String(value || "").split(",").map((part) => part.trim()).filter(Boolean); }
-    function buildTranslationSegments() {
-      const segments = [];
-      if (String(sourceSummary || "").trim()) segments.push({ id: "summary.caption", text: String(sourceSummary).trim() });
-      sourceMetaParts().forEach((text, index) => segments.push({ id: "summary.meta." + index, text }));
-      (Array.isArray(state.items) ? state.items : []).forEach((item, stateIndex) => {
+    function showReplacedText(field, value) {
+      field.value = value;
+      field.setSelectionRange(0, 0);
+      field.scrollTop = 0;
+    }
+    function fieldDisplayLabel(field) {
+      if (field?.id === "summary.caption") return "Summary";
+      if (field?.id === "summary.meta" || field?.id?.startsWith("summary.meta.")) return "Summary metadata";
+      const match = /^item\.(\d+)\.(caption|text|tags)(?:\.\d+)?$/.exec(String(field?.id || ""));
+      if (!match) return String(field?.type || "Text field");
+      const index = Number(match[1]);
+      const kind = TYPE_NAME[state.items[index]?.label] || "Object";
+      const detail = { caption: "description", text: "exact visible text", tags: "tags" }[match[2]];
+      return `${kind} ${index + 1} · ${detail}`;
+    }
+    function gatherTranslationFields() {
+      const fields = [];
+      if (String(summary.value || "").trim()) fields.push({ id: "summary.caption", text: String(summary.value).trim(), current: () => summary.value, apply: (value) => showReplacedText(summary, value) });
+      sourceMetaParts(meta.value).forEach((text, index) => fields.push({
+        id: `summary.meta.${index}`, text,
+        current: () => sourceMetaParts(meta.value)[index] ?? null,
+        apply: (value) => { const parts = sourceMetaParts(meta.value); if (index < parts.length) { parts[index] = value; meta.value = parts.join(", "); } },
+      }));
+      state.items.forEach((item, index) => {
         if (!item || typeof item !== "object") return;
-        for (const field of ["caption", "text"]) if (typeof item[field] === "string" && item[field].trim()) segments.push({ id: "item." + stateIndex + "." + field, text: field === "caption" ? item[field].trim() : item[field] });
-        (Array.isArray(item.tags) ? item.tags : []).forEach((text, tagIndex) => { if (typeof text === "string" && text.trim()) segments.push({ id: "item." + stateIndex + ".tags." + tagIndex, text }); });
+        for (const field of ["caption", "text"]) if (typeof item[field] === "string" && item[field].trim()) fields.push({
+          id: `item.${index}.${field}`, text: field === "caption" ? item[field].trim() : item[field],
+          current: () => state.items.includes(item) ? item[field] ?? null : null,
+          apply: (value) => { if (state.items.includes(item)) { if (field === "text" && !value.trim()) delete item.text; else item[field] = value; } },
+        });
+        (Array.isArray(item.tags) ? item.tags : []).forEach((text, tagIndex) => {
+          if (typeof text !== "string" || !text.trim()) return;
+          fields.push({ id: `item.${index}.tags.${tagIndex}`, text, current: () => state.items.includes(item) ? item.tags?.[tagIndex] ?? null : null, apply: (value) => { if (state.items.includes(item) && Array.isArray(item.tags) && tagIndex < item.tags.length) item.tags[tagIndex] = value; } });
+        });
       });
-      return segments;
+      return fields;
     }
     function translationSettings(settings = {}) {
       return {
@@ -537,29 +604,16 @@ app.registerExtension({
         keep_model_loaded: settings.keep_model_loaded !== false,
       };
     }
-    function translationSourceKey(segments, settings) {
-      const normalized = translationSettings(settings);
-      const payload = JSON.stringify({ segments: segments.filter((entry) => entry.text.trim()), settings: {
-        device: normalized.device, max_input_tokens: normalized.max_input_tokens,
-        max_new_tokens: normalized.max_new_tokens, model_size: normalized.model_size,
-        prompt_mode: normalized.prompt_mode, quantization: normalized.quantization,
-        source_language: normalized.source_language, target_language: normalized.target_language,
-      }});
-      let hash = 0xcbf29ce484222325n;
-      const prime = 0x100000001b3n, mask = 0xffffffffffffffffn;
-      for (let i = 0; i < payload.length; i++) {
-        const unit = payload.charCodeAt(i);
-        hash = ((hash ^ BigInt(unit & 255)) * prime) & mask;
-        hash = ((hash ^ BigInt(unit >>> 8)) * prime) & mask;
-      }
-      return hash.toString(16).padStart(16, "0");
-    }
     function enhancerSettings(settings = {}) {
       const numberOr = (key, fallback) => settings[key] !== undefined && settings[key] !== "" && Number.isFinite(Number(settings[key])) ? Number(settings[key]) : fallback;
+      const reasoningEffort = ["off", "low", "medium", "high"].includes(settings.reasoning_effort)
+        ? settings.reasoning_effort : settings.thinking === true ? "medium" : "off";
       return {
-        max_length: Math.trunc(Math.max(16, Math.min(32768, numberOr("max_length", 2048)))),
-        thinking: settings.thinking === true,
+        max_length: Math.trunc(Math.max(16, Math.min(32768, numberOr("max_length", 1024)))),
+        thinking: reasoningEffort !== "off",
+        reasoning_effort: reasoningEffort,
         use_default_template: settings.use_default_template !== false,
+        use_jinja_template: (settings.use_jinja_template ?? settings.use_default_template) !== false,
         temperature: Math.max(0.01, Math.min(2, numberOr("temperature", 0.7))),
         top_k: Math.trunc(Math.max(0, Math.min(1000, numberOr("top_k", 20)))),
         top_p: Math.max(0, Math.min(1, numberOr("top_p", 0.8))),
@@ -570,11 +624,96 @@ app.registerExtension({
         sampling_mode: settings.sampling_mode === "off" ? "off" : "on",
         mtp: settings.mtp || "auto",
         system_prompt: String(settings.system_prompt || ""),
+        edit_system_prompt: typeof settings.edit_system_prompt === "string" ? settings.edit_system_prompt.trim() : "",
+        geometry_system_prompt: typeof settings.geometry_system_prompt === "string" ? settings.geometry_system_prompt.trim() : "",
+        field_prompts: Object.fromEntries(Object.keys(FIELD_PROMPT_LABELS)
+          .filter((key) => typeof settings.field_prompts?.[key] === "string" && settings.field_prompts[key].trim())
+          .map((key) => [key, settings.field_prompts[key].trim()])),
+        context_mode: ["none", "summary", "full"].includes(settings.context_mode) ? settings.context_mode : "full",
       };
+    }
+    function updateContextControl() {
+      const mode = enhancerSettings(state.promptEnhancerSettings || {}).context_mode;
+      const index = Math.max(0, CONTEXT_MODES.indexOf(mode));
+      if (contextSlider) contextSlider.value = String(index);
+      if (contextValue) contextValue.textContent = CONTEXT_LABELS[index] || "Full";
+      if (contextSlider) contextSlider.title = `${CONTEXT_LABELS[index]} context: ${["only the target field", "the global summary and metadata", "the summary and all box fields and coordinates"][index]}`;
     }
     function enhancerUrl(path) {
       const route = `/moss_layout_ydr/prompt-enhancer/${path}`;
       return typeof app.api?.apiURL === "function" ? app.api.apiURL(route) : route;
+    }
+    async function runTextAction(kind, payload, fields, verb, { apply, onQueued, onError, watch = fields } = {}) {
+      const labels = fields.map(fieldDisplayLabel);
+      const labelsById = new Map(fields.map((field, index) => [field.id, labels[index]]));
+      const snapshots = watch.map((field) => ({ field, expected: field.current() }));
+      const action = { status: `${verb} · submitting…`, progress: 0, snapshots };
+      const previous = lastAction;
+      let complete;
+      lastAction = new Promise((resolve) => { complete = resolve; });
+      pendingActions.add(action);
+      if (pendingActions.size === 1) startEnhancerProgress();
+      refreshTranslationStatus();
+      try {
+        const result = await queueTextAction(app, node, kind, payload, {
+          onQueued: () => {
+            action.status = `${verb} · waiting in the ComfyUI queue…`;
+            refreshTranslationStatus();
+            onQueued?.();
+          },
+          onProgress: (event) => {
+            const fraction = event.finished ? 1 : event.token_limit
+              ? Math.min(0.99, event.tokens / event.token_limit) : 0;
+            const ratio = event.max > 0 ? event.value / event.max : (event.index - 1 + fraction) / event.total;
+            const tokenStatus = event.token_limit ? ` · ${event.tokens}/${event.token_limit} tokens` : "";
+            const fieldLabel = `${verb} ${labelsById.get(event.field_id) ?? labels[event.index - 1] ?? "text field"}`;
+            action.progress = 100 * ratio;
+            runningAction = action;
+            action.status = `${fieldLabel} · ${event.index}/${event.total}${tokenStatus}`;
+            refreshTranslationStatus();
+            return fieldLabel;
+          },
+        });
+        await previous;
+        // Pending jobs keep their original model inputs. Accept earlier queue changes
+        // as the current value only where the user has not edited the field meanwhile.
+        const following = Array.from(pendingActions).filter((job) => job !== action)
+          .flatMap((job) => job.snapshots)
+          .filter(({ field, expected }) => field.current() === expected);
+        activeOperationStatus = apply(result, snapshots);
+        for (const entry of following) entry.expected = entry.field.current();
+      } catch (error) {
+        await previous;
+        activeOperationStatus = error?.message || String(error);
+        onError?.(activeOperationStatus);
+      } finally {
+        pendingActions.delete(action);
+        if (runningAction === action) runningAction = undefined;
+        if (!pendingActions.size) finishEnhancerProgress(action.progress >= 100);
+        refreshTranslationStatus();
+        complete();
+      }
+    }
+    function applyActionValues(snapshots, result) {
+      let applied = 0, skipped = 0;
+      const editor = openBoxTextEditor;
+      const before = editor?.readSaved();
+      for (const { field, expected } of snapshots) {
+        const value = result.values[field.id];
+        if (typeof value !== "string" || !value.trim() || value === field.text) continue;
+        const current = field.current();
+        if (current === value) continue;
+        if (current == null || current !== expected) { skipped++; continue; }
+        field.apply(value);
+        applied++;
+      }
+      if (applied) editor?.refresh(before);
+      // Keep the edits when the same connected layout is used on the next workflow run.
+      if (applied > 0 && linkedInput(node, "layout_text") && state.lastLayoutInputHash) {
+        state.suppressLayoutInput = true;
+        state.suppressLayoutHash = state.lastLayoutInputHash;
+      }
+      return { applied, skipped };
     }
     function clipSocketConnected() {
       return (node.inputs || []).some((input) => input.name === "clip" && input.link != null);
@@ -584,55 +723,37 @@ app.registerExtension({
     }
     function setEnhancerProgress(value) {
       const progress = $(".mb-enhancer-progress");
-      const percent = Math.max(0, Math.min(100, Number(value) || 0));
+      const percent = Math.min(100, Math.max(0, value));
       const circle = progress?.querySelector(".mb-progress-value");
-      if (circle) circle.style.strokeDashoffset = String((56.55 * (1 - percent / 100)).toFixed(2));
+      if (circle) circle.style.strokeDashoffset = String(56.55 * (1 - percent / 100));
       progress?.setAttribute("aria-valuenow", String(Math.round(percent)));
     }
     function startEnhancerProgress() {
-      clearInterval(enhancerProgressTimer);
       clearTimeout(enhancerProgressHideTimer);
-      $(".mb-enhancer-progress")?.classList.add("is-active");
       setEnhancerProgress(0);
-    }
-    function animateEnhancerFieldProgress(fieldIndex, totalFields, field) {
-      clearInterval(enhancerProgressTimer);
-      const startedAt = performance.now();
-      const estimateMs = Math.max(7000, Math.min(60000, 5000 + String(field.text || "").length * 26));
-      enhancerProgressTimer = setInterval(() => {
-        const partial = Math.min(0.92, ((performance.now() - startedAt) / estimateMs) * 0.92);
-        setEnhancerProgress(((fieldIndex + partial) / totalFields) * 100);
-      }, 100);
-    }
-    function completeEnhancerFieldProgress(fieldIndex, totalFields) {
-      clearInterval(enhancerProgressTimer);
-      enhancerProgressTimer = null;
-      setEnhancerProgress(((fieldIndex + 1) / totalFields) * 100);
+      $(".mb-enhancer-progress")?.classList.add("is-active");
     }
     function finishEnhancerProgress(success) {
-      clearInterval(enhancerProgressTimer);
-      enhancerProgressTimer = null;
       if (success) setEnhancerProgress(100);
       enhancerProgressHideTimer = setTimeout(() => {
         $(".mb-enhancer-progress")?.classList.remove("is-active");
-        setEnhancerProgress(0);
-      }, success ? 360 : 180);
+      }, 220);
     }
     function gatherEnhanceAllFields() {
       const fields = [];
       const add = (id, type, text, current, apply) => {
         if (typeof text === "string" && text.trim()) fields.push({ id, type, text, current, apply });
       };
-      add("summary.caption", "whole-image summary", summary.value, () => summary.value, (value) => { summary.value = value; });
+      add("summary.caption", "whole-image summary", summary.value, () => summary.value, (value) => showReplacedText(summary, value));
       add("summary.meta", "summary metadata tags", meta.value, () => meta.value, (value) => { meta.value = value; });
       state.items.forEach((item, index) => {
         if (!item || typeof item !== "object") return;
         for (const field of ["caption", "text"]) {
-          add(`item.${index}.${field}`, field === "caption" ? `${TYPE_NAME[item.label] || "Object"} description` : "exact visible text", item[field], () => state.items.includes(item) ? item[field] : null, (value) => { item[field] = value; });
+          add(`item.${index}.${field}`, field === "caption" ? `${TYPE_NAME[item.label] || "Object"} description` : "exact visible text", item[field], () => state.items.includes(item) ? item[field] ?? null : null, (value) => { if (state.items.includes(item)) item[field] = value; });
         }
         if (Array.isArray(item.tags)) {
           const tags = item.tags.join(", ");
-          add(`item.${index}.tags`, "box tags", tags, () => state.items.includes(item) && Array.isArray(item.tags) ? item.tags.join(", ") : null, (value) => { item.tags = value.split(",").map((tag) => tag.trim()).filter(Boolean); });
+          add(`item.${index}.tags`, "box tags", tags, () => state.items.includes(item) && Array.isArray(item.tags) ? item.tags.join(", ") : null, (value) => { if (state.items.includes(item)) item.tags = value.split(",").map((tag) => tag.trim()).filter(Boolean); });
         }
       });
       return fields;
@@ -666,85 +787,565 @@ app.registerExtension({
         items,
       };
     }
-    async function enhanceFields(fields, button = null) {
-      if (enhancerBusy || translationBusy) return;
-      const filled = fields.filter((field) => typeof field.text === "string" && field.text.trim());
-      if (!filled.length) { $(".mb-translation-status").textContent = "Add text to a field before generating"; return; }
+    function enhanceFields(fields, options = {}) {
+      fields = fields.filter((field) => typeof field?.text === "string" && field.text.trim());
+      if (!fields.length) { $(".mb-translation-status").textContent = "Add text to a field before generating"; return; }
       const settings = enhancerSettings(state.promptEnhancerSettings || {});
       state.promptEnhancerSettings = settings;
       syncWidgets();
-      const buttons = [...root.querySelectorAll(".mb-enhance-all, .mb-enhance-field, .mb-enhancer-settings")];
-      buttons.forEach((entry) => { entry.disabled = true; });
-      if (button) button.disabled = true;
-      enhancerBusy = true;
-      refreshTranslationStatus();
-      $(".mb-translation-status").textContent = filled.length === 1 ? "Generating for one field…" : `Generating for ${filled.length} fields…`;
-      let progressStarted = false, generationSucceeded = false;
-      try {
-        const clipResponse = await fetch(enhancerOptionsUrl(), { credentials: "same-origin" });
-        const clipStatus = await clipResponse.json();
-        if (!clipResponse.ok) throw new Error(clipStatus.error || "Could not check the connected CLIP input.");
-        if (!clipStatus.clip_available) {
-          throw new Error(clipSocketConnected()
-            ? "The CLIP input is connected, but ComfyUI has not loaded it into this node yet. Run the workflow and wait for it to finish, then try Generate again."
-            : "Connect a CLIP encoder to this node, run the workflow once, and wait for it to finish before generating text.");
-        }
-        const context = buildEnhancementContext();
-        startEnhancerProgress();
-        progressStarted = true;
-        let applied = 0, skipped = 0;
-        for (const [index, field] of filled.entries()) {
-          $(".mb-translation-status").textContent = filled.length === 1 ? "Generating for one field…" : `Generating field ${index + 1} of ${filled.length}…`;
-          animateEnhancerFieldProgress(index, filled.length, field);
-          const response = await fetch(enhancerUrl("run"), {
-            method: "POST", credentials: "same-origin",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ node_id: String(node.id), segments: [{ id: field.id, type: field.type, text: field.text }], context, settings }),
-          });
-          const result = await response.json();
-          if (!response.ok || result.status !== "ready") throw new Error(result.error || "Text enhancement failed.");
-          state.promptEnhancerSettings = enhancerSettings(result.settings || settings);
-          const value = result.values?.[field.id];
-          if (typeof value === "string" && value.trim()) {
-            if (field.current() !== field.text) skipped++;
-            else { field.apply(value); applied++; }
-          }
-          if (linkedInput(node, "layout_text") && state.lastLayoutInputHash) {
-            state.suppressLayoutInput = true;
-            state.suppressLayoutHash = state.lastLayoutInputHash;
-          }
-          sourceSummary = summary.value;
-          sourceMeta = meta.value;
-          syncWidgets();
-          renderSidebar();
-          draw();
-          completeEnhancerFieldProgress(index, filled.length);
-        }
-        generationSucceeded = true;
-        $(".mb-translation-status").textContent = skipped ? `Generated ${applied}; skipped ${skipped} changed field(s)` : `Generated text for ${applied} field${applied === 1 ? "" : "s"}`;
-      } catch (error) {
-        $(".mb-translation-status").textContent = error.message || String(error);
-      } finally {
-        if (progressStarted) finishEnhancerProgress(generationSucceeded);
-        enhancerBusy = false;
-        buttons.forEach((entry) => { entry.disabled = false; });
-        if (button) button.disabled = false;
-      }
+      const actionVerb = options.editInstruction ? "Editing" : "Generating";
+      return runTextAction(options.editInstruction ? "edit" : "generate", {
+        segments: fields.map((field) => ({ id: field.id, type: fieldDisplayLabel(field), text: field.text })),
+        context: buildEnhancementContext(),
+        settings,
+        ...(options.editInstruction ? { edit_instruction: options.editInstruction } : {}),
+      }, fields, actionVerb, {
+        onQueued: options.onQueued,
+        onError: options.onError,
+        apply: (result, snapshots) => {
+          const { applied, skipped } = applyActionValues(snapshots, result);
+          const emptyFields = result.empty_fields?.length ?? 0;
+          if (applied) saveState();
+          let status = applied
+            ? `${options.editInstruction ? "Edited" : "Updated"} ${applied} field${applied === 1 ? "" : "s"}`
+            : options.editInstruction && !skipped ? "The model returned the original text" : "No fields changed";
+          if (skipped) status += ` · ${skipped} changed after submission`;
+          if (emptyFields) status += ` · ${emptyFields} field${emptyFields === 1 ? "" : "s"} returned no text`;
+          options.onResult?.(status);
+          return status;
+        },
+      });
     }
-    async function openEnhancerSettings() {
-      if (enhancerBusy || translationBusy) return;
-      const shade = document.createElement("div"); shade.className = "mb-modal-shade mb-enhancer-shade";
-      const dialog = document.createElement("div"); dialog.className = "mb-modal mb-enhancer-modal"; dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true");
-      dialog.innerHTML = `<h3>Text generation settings</h3><div class="mb-enhancer-clip-status" role="status">Checking the connected CLIP input…</div><div class="mb-enhancer-message">All Generate buttons share one settings profile and the CLIP input connected to this node. Run this while the ComfyUI workflow queue is idle.</div><details class="mb-enhancer-advanced"><summary>Generation settings</summary><label>Sampling mode</label><select class="mb-enhancer-sampling"><option value="on">On</option><option value="off">Off</option></select><label>Maximum output tokens</label><input class="mb-enhancer-max" type="number" min="16" max="32768" step="64"><label>Temperature</label><input class="mb-enhancer-temperature" type="number" min="0.01" max="2" step="0.05"><label>Top K</label><input class="mb-enhancer-top-k" type="number" min="0" max="1000" step="1"><label>Top P</label><input class="mb-enhancer-top-p" type="number" min="0" max="1" step="0.01"><label>Min P</label><input class="mb-enhancer-min-p" type="number" min="0" max="1" step="0.01"><label>Repetition penalty</label><input class="mb-enhancer-repetition" type="number" min="0" max="5" step="0.05"><label>Presence penalty</label><input class="mb-enhancer-presence" type="number" min="0" max="5" step="0.05"><label>Seed</label><input class="mb-enhancer-seed" type="number" min="0" step="1"><label>MTP</label><select class="mb-enhancer-mtp"><option>auto</option><option>off</option><option>2</option><option>3</option><option>4</option><option>5</option><option>tree2s1</option><option>tree2s2</option><option>tree3s1</option><option>tree4s1m8</option></select><label class="mb-enhancer-check"><input class="mb-enhancer-thinking" type="checkbox">Enable thinking mode</label><label class="mb-enhancer-check"><input class="mb-enhancer-template" type="checkbox" checked>Use the model's default chat template</label><label>System prompt</label><textarea class="mb-enhancer-prompt"></textarea></details><div class="mb-modal-message mb-enhancer-error" aria-live="polite"></div><div class="mb-modal-buttons"><button class="mb-enhancer-cancel">Cancel</button><span></span><button class="primary mb-enhancer-save">Save settings</button></div>`;
+    function parseEditTerms(value) {
+      return [...new Set(String(value || "").split(/[,;\n]+/).map((term) => term.trim()).filter(Boolean))];
+    }
+    function matchingEditTargets(terms) {
+      if (!terms.length) return { boxIndices: [], summary: false, metadata: false };
+      const patterns = terms.map((term) => {
+        const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+        return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}(?=$|[^\\p{L}\\p{N}])`, "iu");
+      });
+      const matches = (value) => typeof value === "string" && patterns.some((pattern) => pattern.test(value));
+      const boxIndices = state.items.flatMap((item, index) => {
+        if (!item || typeof item !== "object") return [];
+        const searchable = [item.label, item.caption, item.text, ...(Array.isArray(item.tags) ? item.tags : [])].filter((value) => typeof value === "string").join(" ");
+        return matches(searchable) ? [index] : [];
+      });
+      return { boxIndices, summary: matches(summary.value), metadata: matches(meta.value) };
+    }
+    function editFieldGroups() {
+      const groups = new Map();
+      for (const field of gatherEnhanceAllFields()) {
+        const box = /^item\.(\d+)\./.exec(field.id);
+        const index = box ? Number(box[1]) : -1;
+        const item = index >= 0 ? state.items[index] : null;
+        const key = item ?? field.id;
+        if (!groups.has(key)) {
+          const label = item ? `${TYPE_NAME[item.label] || "Object"} ${index + 1}` : fieldDisplayLabel(field);
+          groups.set(key, { key, label, fields: [] });
+        }
+        groups.get(key).fields.push(field);
+      }
+      return [...groups.values()];
+    }
+    function resolveEditSelection(groups, terms, manualFields) {
+      if (!terms.length && !manualFields.size) return { groups, all: true };
+      const matched = matchingEditTargets(terms);
+      const selected = new Set(manualFields.keys());
+      if (matched.summary) selected.add("summary.caption");
+      if (matched.metadata) selected.add("summary.meta");
+      for (const index of matched.boxIndices) selected.add(state.items[index]);
+      return { groups: groups.filter((group) => selected.has(group.key)), all: false };
+    }
+    function actionPromptMarkup(title, help) {
+      return `<details class="mb-edit-system">
+        <summary>${title}</summary>
+        <div class="mb-modal-help">${help} Changes are saved with this workflow.</div>
+        <textarea aria-label="${title}" maxlength="12000" placeholder="Leave blank to use the built-in instructions."></textarea>
+        <button type="button">Reset to default</button>
+        <div class="mb-modal-help mb-edit-system-status" aria-live="polite"></div>
+      </details>`;
+    }
+    function bindActionPrompt(dialog, key) {
+      const details = dialog.querySelector(".mb-edit-system");
+      const text = details.querySelector("textarea");
+      const reset = details.querySelector("button");
+      const status = details.querySelector(".mb-edit-system-status");
+      const stored = () => state.promptEnhancerSettings?.[key] || "";
+      text.value = stored() || defaultActionPrompts[key] || "";
+      const save = () => {
+        const value = text.value.trim();
+        state.promptEnhancerSettings = {
+          ...state.promptEnhancerSettings, [key]: value === defaultActionPrompts[key] ? "" : value,
+        };
+        syncWidgets();
+      };
+      text.addEventListener("input", save);
+      reset.onclick = () => {
+        text.value = defaultActionPrompts[key] || "";
+        save();
+        text.focus();
+      };
+      let loading = false;
+      details.addEventListener("toggle", async () => {
+        if (!details.open || defaultActionPrompts[key] || loading) return;
+        loading = true;
+        status.textContent = "Loading built-in instructions…";
+        try {
+          const response = await fetch(enhancerOptionsUrl(), { credentials: "same-origin" });
+          const options = await response.json();
+          const value = options[`default_${key}`];
+          if (!response.ok || typeof value !== "string") throw new Error("Built-in instructions unavailable.");
+          defaultActionPrompts[key] = value;
+          if (!stored()) text.value = value;
+          status.textContent = "";
+        } catch {
+          status.textContent = "Could not load the built-in text. An empty field still uses it.";
+        } finally {
+          loading = false;
+        }
+      });
+    }
+    function openTargetedEditDialog() {
+      const shade = document.createElement("div"); shade.className = "mb-modal-shade mb-edit-shade";
+      const dialog = document.createElement("div"); dialog.className = "mb-modal mb-targeted-edit-modal"; dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true");
+      dialog.innerHTML = `
+        <h3>Edit layout</h3>
+        <div class="mb-edit-modes"><button type="button" aria-pressed="true">Prompt fields</button><button type="button" class="mb-box-geometry" aria-pressed="false">Box Geometry</button></div>
+        <label for="mb-edit-terms">Words or phrases to find</label>
+        <textarea id="mb-edit-terms" class="mb-edit-terms" maxlength="4000" placeholder="birds, red dress, chair"></textarea>
+        <div class="mb-modal-help">Optional. Separate terms with commas, semicolons, or new lines.</div>
+        <label for="mb-edit-instruction">Change Request</label>
+        <textarea id="mb-edit-instruction" class="mb-edit-instruction" maxlength="12000" placeholder="Make the selected subjects look like a watercolor illustration."></textarea>
+        ${actionPromptMarkup("System Prompt (Edit)", "This instruction is added after the shared System Prompt and field guidance. Edit also sends the current field, Change Request, and selected context.")}
+        <div class="mb-edit-targets">
+          <label>Fields to edit</label>
+          <div class="mb-edit-picked"></div>
+          <button type="button" class="mb-edit-add" aria-expanded="false" aria-controls="mb-edit-field-picker">+ Add Field</button>
+          <select id="mb-edit-field-picker" class="mb-edit-field-picker" aria-label="Field to add" hidden></select>
+        </div>
+        <div class="mb-modal-help">Manual choices are added to keyword matches. Selecting a box includes all its filled text fields. Leave both selections empty to edit every filled field.</div>
+        <div class="mb-modal-message mb-edit-match-count" aria-live="polite"></div>
+        <div class="mb-modal-buttons"><button type="button" class="mb-edit-cancel">Cancel</button><span></span><button type="button" class="primary mb-edit-run" disabled>Edit fields</button></div>
+      `;
       shade.append(dialog); document.body.append(shade);
       const closeButton = document.createElement("button"); closeButton.type = "button"; closeButton.className = "mb-modal-close"; closeButton.title = "Close"; closeButton.setAttribute("aria-label", "Close"); closeButton.textContent = "×"; dialog.insertBefore(closeButton, dialog.firstChild);
+      const termsInput = dialog.querySelector(".mb-edit-terms"), instructionInput = dialog.querySelector(".mb-edit-instruction");
+      const matchCount = dialog.querySelector(".mb-edit-match-count"), run = dialog.querySelector(".mb-edit-run");
+      const add = dialog.querySelector(".mb-edit-add"), picker = dialog.querySelector(".mb-edit-field-picker");
+      const picked = dialog.querySelector(".mb-edit-picked");
+      bindActionPrompt(dialog, "edit_system_prompt");
+      const manualFields = new Map();
+      let available = [], running = false;
+      const showPicker = (shown) => {
+        picker.hidden = !shown;
+        add.setAttribute("aria-expanded", String(shown));
+      };
       const close = () => shade.remove();
+      closeButton.onclick = dialog.querySelector(".mb-edit-cancel").onclick = close;
+      dialog.querySelector(".mb-box-geometry").onclick = () => {
+        if (running) return;
+        close();
+        openGeometryEditDialog();
+      };
+      shade.addEventListener("pointerdown", (event) => { if (event.target === shade) close(); });
+      shade.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape") return;
+        if (!picker.hidden) {
+          showPicker(false);
+          add.focus();
+        } else close();
+      });
+      termsInput.value = typeof state.lastEditTerms === "string" ? state.lastEditTerms : "";
+      instructionInput.value = typeof state.lastEditInstruction === "string" ? state.lastEditInstruction : "";
+      const saveEditDialogState = () => {
+        state.lastEditTerms = termsInput.value;
+        state.lastEditInstruction = instructionInput.value;
+        savedState.value = JSON.stringify(state);
+        setValue(node, "editor_state", savedState.value);
+      };
+      const refreshSelection = () => {
+        const groups = editFieldGroups();
+        available = groups.filter((group) => !manualFields.has(group.key));
+        picker.replaceChildren(new Option("Choose a field…", ""), ...available.map((group, index) => new Option(group.label, String(index))));
+        if (!available.length) showPicker(false);
+        add.disabled = running || !available.length;
+        picker.disabled = running;
+        termsInput.disabled = instructionInput.disabled = running;
+        picked.replaceChildren();
+        for (const [key, name] of manualFields) {
+          const chip = document.createElement("button");
+          chip.type = "button";
+          chip.disabled = running;
+          chip.textContent = `${name} ×`;
+          chip.setAttribute("aria-label", `Remove ${name}`);
+          chip.onclick = () => {
+            manualFields.delete(key);
+            refreshSelection();
+            add.focus();
+          };
+          picked.append(chip);
+        }
+        const selection = resolveEditSelection(groups, parseEditTerms(termsInput.value), manualFields);
+        const fields = selection.groups.flatMap((group) => group.fields);
+        const count = `${fields.length} filled field${fields.length === 1 ? "" : "s"}`;
+        if (running) matchCount.textContent = `Editing ${count}…`;
+        else if (selection.all) matchCount.textContent = fields.length ? `All ${count} selected.` : "There are no filled fields to edit.";
+        else if (fields.length) {
+          const names = selection.groups.slice(0, 4).map((group) => group.label).join(", ");
+          const remaining = selection.groups.length - 4;
+          matchCount.textContent = `${count} selected · ${names}${remaining > 0 ? ` and ${remaining} more` : ""}.`;
+        } else matchCount.textContent = "No filled fields match the current selection.";
+        run.disabled = running || !instructionInput.value.trim() || !fields.length;
+        return fields;
+      };
+      add.onclick = () => {
+        showPicker(picker.hidden);
+        if (!picker.hidden) {
+          picker.focus();
+          try { picker.showPicker?.(); } catch { /* The native select remains keyboard accessible. */ }
+        }
+      };
+      picker.onchange = () => {
+        if (picker.value === "") return;
+        const group = available[Number(picker.value)];
+        if (!group) return;
+        manualFields.set(group.key, group.label);
+        showPicker(false);
+        refreshSelection();
+        (add.disabled ? instructionInput : add).focus();
+      };
+      termsInput.addEventListener("input", () => { saveEditDialogState(); refreshSelection(); });
+      instructionInput.addEventListener("input", () => { saveEditDialogState(); refreshSelection(); });
+      let submission = 0;
+      run.addEventListener("click", () => {
+        if (running) return;
+        const instruction = instructionInput.value.trim();
+        const fields = refreshSelection();
+        if (!instruction || !fields.length) return;
+        running = true;
+        showPicker(false);
+        refreshSelection();
+        const currentSubmission = ++submission;
+        const showStatus = (status) => {
+          if (currentSubmission !== submission) return;
+          running = false;
+          refreshSelection();
+          matchCount.textContent = status;
+        };
+        enhanceFields(fields, {
+          editInstruction: instruction,
+          onQueued: () => showStatus("Added to the ComfyUI queue."),
+          onResult: showStatus,
+          onError: showStatus,
+        });
+      });
+      refreshSelection();
+      termsInput.focus();
+    }
+    function geometryTargets(items, width, height) {
+      const frame = fieldRect();
+      const clampUnit = (value) => Math.max(0, Math.min(1, value));
+      return items.map((item, index) => {
+        const frameBox = boxPx(item.bbox).map((value, axis) => clampUnit(axis % 2
+          ? (value - frame.y) / frame.h : (value - frame.x) / frame.w));
+        const bbox = frameBox.map((value) => Math.round(value * 1000));
+        const pixelBox = frameBox.map((value, axis) => Math.round(value * (axis % 2 ? height : width)));
+        if (!geometryBoxValid(bbox) || pixelBox[0] >= pixelBox[2] || pixelBox[1] >= pixelBox[3]) {
+          throw new Error("A selected box has no usable area inside the generation frame.");
+        }
+        return {
+          item, frameBox,
+          input: {
+            id: `B${index + 1}`, bbox, pixel_bbox: pixelBox,
+            type: TYPE_NAME[item.label] || "Object",
+            description: String(item.caption || "").slice(0, 3000),
+            visible_text: String(item.text || "").slice(0, 1000),
+            tags: Array.isArray(item.tags) ? item.tags.slice(0, 20).map((tag) => String(tag).slice(0, 120)) : [],
+          },
+        };
+      });
+    }
+    function geometryBoxValid(box) {
+      return Array.isArray(box) && box.length === 4
+        && box.every((value) => Number.isInteger(value) && value >= 0 && value <= 1000)
+        && box[0] < box[2] && box[1] < box[3];
+    }
+    function geometryReference(image, targets, frameWidth, frameHeight) {
+      const reference = document.createElement("canvas");
+      const resize = Math.min(1024 / frameWidth, 1024 / frameHeight);
+      const width = reference.width = Math.max(1, Math.round(frameWidth * resize));
+      const height = reference.height = Math.max(1, Math.round(frameHeight * resize));
+      const context = reference.getContext("2d");
+      const fit = Math.min(width / image.naturalWidth, height / image.naturalHeight);
+      const drawnWidth = image.naturalWidth * fit, drawnHeight = image.naturalHeight * fit;
+      context.fillStyle = "#252a2c";
+      context.fillRect(0, 0, width, height);
+      context.drawImage(image, (width - drawnWidth) / 2, (height - drawnHeight) / 2, drawnWidth, drawnHeight);
+      const fontSize = Math.max(12, Math.round(Math.min(width, height) * .029));
+      context.font = `bold ${fontSize}px sans-serif`;
+      context.textBaseline = "top";
+      targets.forEach(({ input, frameBox }, index) => {
+        const [left, top, right, bottom] = frameBox.map((value, axis) => value * (axis % 2 ? height : width));
+        const color = `hsl(${(48 + index * 137.5) % 360} 95% 69%)`;
+        const boxWidth = right - left, boxHeight = bottom - top;
+        context.strokeStyle = "#181a1b";
+        context.lineWidth = 5;
+        context.strokeRect(left, top, boxWidth, boxHeight);
+        context.strokeStyle = color;
+        context.lineWidth = 2;
+        context.strokeRect(left, top, boxWidth, boxHeight);
+        const labelWidth = context.measureText(input.id).width + 8;
+        const labelX = Math.min(left, Math.max(0, width - labelWidth));
+        const labelY = top >= fontSize + 5 ? top - fontSize - 5 : top;
+        context.fillStyle = "#181a1b";
+        context.fillRect(labelX, labelY, labelWidth, fontSize + 5);
+        context.fillStyle = color;
+        context.fillText(input.id, labelX + 4, labelY + 2);
+      });
+      try {
+        return reference.toDataURL("image/jpeg", .84);
+      } catch {
+        throw new Error("The current background could not be sent to CLIP. Turn off Use current background to continue with coordinates only.");
+      }
+    }
+    function applyGeometryResult(targets, values, snapshots) {
+      const updates = [];
+      for (const [index, { item, input }] of targets.entries()) {
+        const { field, expected } = snapshots[index];
+        if (field.current() == null || field.current() !== expected) {
+          throw new Error("A selected box changed while CLIP was working. Run the edit again to use the new coordinates.");
+        }
+        const bbox = values[input.id];
+        if (!geometryBoxValid(bbox)) throw new Error("CLIP returned invalid box coordinates.");
+        if (!bbox.every((value, index) => value === input.bbox[index])) {
+          updates.push({ item, bbox: generationBoxToWorkspace(bbox.map((value) => value / 1000)) });
+        }
+      }
+      for (const { item, bbox } of updates) item.bbox = bbox;
+      if (updates.length && linkedInput(node, "layout_text") && state.lastLayoutInputHash) {
+        state.suppressLayoutInput = true;
+        state.suppressLayoutHash = state.lastLayoutInputHash;
+      }
+      return updates.length;
+    }
+    function openGeometryEditDialog() {
+      const shade = document.createElement("div");
+      shade.className = "mb-modal-shade";
+      const dialog = document.createElement("div");
+      dialog.className = "mb-modal";
+      dialog.setAttribute("role", "dialog");
+      dialog.setAttribute("aria-modal", "true");
+      dialog.setAttribute("aria-label", "Edit box geometry");
+      dialog.innerHTML = `
+        <button type="button" class="mb-modal-close" aria-label="Close">×</button>
+        <h3>Edit layout</h3>
+        <div class="mb-edit-modes"><button type="button" class="mb-prompt-edit" aria-pressed="false">Prompt fields</button><button type="button" aria-pressed="true">Box Geometry</button></div>
+        <label>Change request<textarea class="mb-geometry-prompt" maxlength="6000" placeholder="Make the house about the size of a mouse, keeping it on the ground."></textarea></label>
+        ${actionPromptMarkup("System Prompt (Box Geometry)", "These instructions guide how the model reads the selected boxes, optional reference image, and Change Request.")}
+        <label>Boxes to edit</label>
+        <div class="mb-geometry-selection"><button type="button" class="mb-geometry-all">Select all</button><button type="button" class="mb-geometry-none">Clear selection</button></div>
+        <div class="mb-geometry-list"></div>
+        <label class="mb-geometry-choice"><input class="mb-geometry-image" type="checkbox"> <span>Use current background</span></label>
+        <div class="mb-modal-help">CLIP receives the full background with outlines, coordinates, and descriptions for the selected boxes. Using the background requires a vision-capable encoder.</div>
+        <div class="mb-modal-message mb-geometry-message" aria-live="polite"></div>
+        <div class="mb-modal-buttons"><button type="button" class="mb-geometry-cancel">Close</button><span></span><button type="button" class="primary mb-geometry-run">Adjust boxes</button></div>
+      `;
+      const control = (selector) => dialog.querySelector(selector);
+      const prompt = control(".mb-geometry-prompt"), run = control(".mb-geometry-run");
+      const useImage = control(".mb-geometry-image"), message = control(".mb-geometry-message");
+      const all = control(".mb-geometry-all"), none = control(".mb-geometry-none");
+      const back = control(".mb-prompt-edit"), list = control(".mb-geometry-list");
+      bindActionPrompt(dialog, "geometry_system_prompt");
+      const background = () => latestPreview?.complete && latestPreview.naturalWidth ? latestPreview : null;
+      useImage.disabled = !background();
+      useImage.checked = !useImage.disabled;
+      const choices = state.items.map((item, index) => {
+        const row = document.createElement("label"), check = document.createElement("input");
+        const caption = document.createElement("span");
+        row.className = "mb-geometry-choice";
+        check.type = "checkbox";
+        check.checked = !state.items[selected] || selected === index;
+        caption.textContent = `${TYPE_NAME[item.label] || "Object"} ${index + 1}${item.caption ? ` · ${item.caption}` : ""}`;
+        caption.title = caption.textContent;
+        row.append(check, caption);
+        list.append(row);
+        return { item, check };
+      });
+      const close = () => shade.remove();
+      control(".mb-modal-close").onclick = control(".mb-geometry-cancel").onclick = close;
+      back.onclick = () => { close(); openTargetedEditDialog(); };
+      shade.onpointerdown = (event) => { if (event.target === shade) close(); };
+      shade.onkeydown = (event) => { if (event.key === "Escape") close(); };
+      const picked = () => choices.filter(({ check }) => check.checked);
+      let submitting = false;
+      const refresh = () => {
+        const count = picked().length;
+        run.disabled = !prompt.value.trim() || !count || submitting;
+        message.textContent = count ? `${count} box${count === 1 ? "" : "es"} selected` : "Select a box to edit.";
+      };
+      all.onclick = () => { choices.forEach(({ check }) => { check.checked = true; }); refresh(); };
+      none.onclick = () => { choices.forEach(({ check }) => { check.checked = false; }); refresh(); };
+      list.onchange = prompt.oninput = refresh;
+      let submission = 0;
+      run.onclick = () => {
+        if (run.disabled) return;
+        if (!clipSocketConnected()) {
+          message.textContent = "Connect a CLIP encoder to MOSS Layout YDR.";
+          return;
+        }
+        const width = Number(wInput.value), height = Number(hInput.value);
+        const image = useImage.checked ? background() : null;
+        let targets, reference;
+        try {
+          targets = geometryTargets(picked().map(({ item }) => item), width, height);
+          if (useImage.checked && !image) throw new Error("The current background is still loading.");
+          if (image) reference = geometryReference(image, targets, width, height);
+        } catch (error) {
+          message.textContent = error.message;
+          return;
+        }
+        submitting = run.disabled = true;
+        message.textContent = "Submitting box geometry…";
+        const currentSubmission = ++submission;
+        const showStatus = (status) => {
+          if (currentSubmission !== submission) return;
+          submitting = false;
+          refresh();
+          message.textContent = status;
+        };
+        runTextAction("geometry", {
+          instruction: prompt.value.trim(), width, height, image: reference,
+          boxes: targets.map(({ input }) => input),
+          settings: enhancerSettings(state.promptEnhancerSettings || {}),
+        }, [{
+          id: "geometry",
+          type: targets.length === 1
+            ? `${TYPE_NAME[targets[0].item.label] || "Object"} ${state.items.indexOf(targets[0].item) + 1} geometry`
+            : `geometry for ${targets.length} boxes`,
+        }], "Adjusting", {
+          watch: targets.map(({ item }) => ({ current: () => state.items.includes(item) ? item.bbox.join(",") : null })),
+          onQueued: () => showStatus("Added to the ComfyUI queue."),
+          onError: showStatus,
+          apply: (result, snapshots) => {
+            if (width !== Number(wInput.value) || height !== Number(hInput.value) || (image && image !== background())) {
+              throw new Error("The generation frame or background changed after submission. Run the edit again.");
+            }
+            const changed = applyGeometryResult(targets, result.values, snapshots);
+            if (changed) saveState();
+            const status = changed ? `Adjusted ${changed} box${changed === 1 ? "" : "es"}` : "No box coordinates changed";
+            showStatus(status);
+            return status;
+          },
+        });
+      };
+      shade.append(dialog);
+      document.body.append(shade);
+      refresh();
+      prompt.focus();
+    }
+    async function openEnhancerSettings() {
+      const shade = document.createElement("div"); shade.className = "mb-modal-shade mb-enhancer-shade";
+      const dialog = document.createElement("div"); dialog.className = "mb-modal mb-enhancer-modal"; dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true");
+      dialog.innerHTML = `
+        <h3>Text Generation Settings</h3>
+        <label for="mb-enhancer-system">System Prompt</label>
+        <textarea id="mb-enhancer-system" class="mb-enhancer-prompt" maxlength="12000"></textarea>
+        <div class="mb-field-prompt-buttons" aria-label="Field prompts"></div>
+        <details class="mb-enhancer-advanced">
+          <summary>Generation Settings</summary>
+          <div class="mb-enhancer-clip-status" role="status">Checking the connected CLIP input…</div>
+          <label>Reasoning guidance</label>
+          <select class="mb-enhancer-reasoning"><option value="off">Off</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select>
+          <div class="mb-modal-help">The model’s template may support toggling thinking. The effort levels are guidance for the prompt.</div>
+          <label>Sampling mode</label>
+          <select class="mb-enhancer-sampling"><option value="on">On</option><option value="off">Off</option></select>
+          <label>Maximum output tokens</label>
+          <input class="mb-enhancer-max" type="number" min="16" max="32768" step="64">
+          <div class="mb-modal-help">For one prompt field, start with 512–1024 tokens. Thinking may consume part of that budget.</div>
+          <label>Temperature</label><input class="mb-enhancer-temperature" type="number" min="0.01" max="2" step="0.05">
+          <label>Top K</label><input class="mb-enhancer-top-k" type="number" min="0" max="1000" step="1">
+          <label>Top P</label><input class="mb-enhancer-top-p" type="number" min="0" max="1" step="0.01">
+          <label>Min P</label><input class="mb-enhancer-min-p" type="number" min="0" max="1" step="0.01">
+          <label>Repetition penalty</label><input class="mb-enhancer-repetition" type="number" min="0" max="5" step="0.05">
+          <label>Presence penalty</label><input class="mb-enhancer-presence" type="number" min="0" max="5" step="0.05">
+          <label>Seed</label><input class="mb-enhancer-seed" type="number" min="0" step="1">
+          <label>MTP</label><select class="mb-enhancer-mtp"><option>auto</option><option>off</option><option>2</option><option>3</option><option>4</option><option>5</option><option>tree2s1</option><option>tree2s2</option><option>tree3s1</option><option>tree4s1m8</option></select>
+          <div class="mb-modal-help">Speculative decoding requires a checkpoint with MTP weights.</div>
+          <label class="mb-enhancer-check"><input class="mb-enhancer-jinja" type="checkbox">Use tokenizer Jinja template</label>
+          <label class="mb-enhancer-check"><input class="mb-enhancer-template" type="checkbox">Use ComfyUI chat template as fallback</label>
+          <div class="mb-modal-help">Jinja uses the connected tokenizer’s own template when available. With neither template active, the system instructions are included in the plain prompt.</div>
+        </details>
+        <div class="mb-modal-message mb-enhancer-error" aria-live="polite"></div>
+        <div class="mb-modal-buttons"><button type="button" class="mb-enhancer-cancel">Cancel</button><span></span><button type="button" class="primary mb-enhancer-save">Save settings</button></div>
+      `;
+      shade.append(dialog); document.body.append(shade);
+      const closeButton = document.createElement("button"); closeButton.type = "button"; closeButton.className = "mb-modal-close"; closeButton.title = "Close"; closeButton.setAttribute("aria-label", "Close"); closeButton.textContent = "×"; dialog.insertBefore(closeButton, dialog.firstChild);
+      let fieldPromptShade = null;
+      const close = () => {
+        fieldPromptShade?.remove();
+        shade.remove();
+      };
       closeButton.onclick = dialog.querySelector(".mb-enhancer-cancel").onclick = close;
       shade.addEventListener("pointerdown", (event) => { if (event.target === shade) close(); });
       shade.addEventListener("keydown", (event) => { if (event.key === "Escape") close(); });
       const previous = enhancerSettings(state.promptEnhancerSettings || {});
       const promptField = dialog.querySelector(".mb-enhancer-prompt");
       promptField.value = previous.system_prompt;
+      const fieldPrompts = { ...previous.field_prompts };
+      let defaultFieldPrompts = {};
+      const promptButtons = dialog.querySelector(".mb-field-prompt-buttons");
+      for (const [key, label] of Object.entries(FIELD_PROMPT_LABELS)) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = label;
+        button.classList.toggle("is-custom", Boolean(fieldPrompts[key]));
+        button.onclick = () => {
+          if (fieldPromptShade) return;
+          const overlay = document.createElement("div");
+          overlay.className = "mb-modal-shade";
+          const panel = document.createElement("div");
+          panel.className = "mb-modal mb-field-prompt-modal";
+          panel.setAttribute("role", "dialog");
+          panel.setAttribute("aria-modal", "true");
+          panel.setAttribute("aria-label", `${label} Prompt`);
+          panel.innerHTML = `
+            <button type="button" class="mb-modal-close" aria-label="Close">×</button>
+            <h3></h3>
+            <div class="mb-modal-help">Generate and Edit add this instruction to the System Prompt for this field type.</div>
+            <textarea aria-label="Field prompt" maxlength="6000"></textarea>
+            <div class="mb-modal-buttons"><button type="button" class="mb-field-reset">Reset to default</button><span></span><button type="button" class="primary mb-field-apply">Apply</button></div>
+          `;
+          panel.querySelector("h3").textContent = `${label} Prompt`;
+          const text = panel.querySelector("textarea");
+          text.value = fieldPrompts[key] || defaultFieldPrompts[key] || "";
+          text.placeholder = "Leave empty to use the built-in prompt.";
+          const dismiss = () => {
+            overlay.remove();
+            fieldPromptShade = null;
+            button.focus();
+          };
+          panel.querySelector(".mb-modal-close").onclick = dismiss;
+          panel.querySelector(".mb-field-reset").onclick = () => {
+            text.value = defaultFieldPrompts[key] || "";
+            text.focus();
+          };
+          panel.querySelector(".mb-field-apply").onclick = () => {
+            const value = text.value.trim();
+            if (value && value !== defaultFieldPrompts[key]) fieldPrompts[key] = value;
+            else delete fieldPrompts[key];
+            button.classList.toggle("is-custom", Boolean(fieldPrompts[key]));
+            dismiss();
+          };
+          overlay.append(panel);
+          overlay.addEventListener("pointerdown", (event) => { if (event.target === overlay) dismiss(); });
+          overlay.addEventListener("keydown", (event) => { if (event.key === "Escape") dismiss(); });
+          fieldPromptShade = overlay;
+          document.body.append(overlay);
+          text.focus();
+        };
+        promptButtons.append(button);
+      }
       dialog.querySelector(".mb-enhancer-max").value = previous.max_length;
       dialog.querySelector(".mb-enhancer-temperature").value = previous.temperature;
       dialog.querySelector(".mb-enhancer-top-k").value = previous.top_k;
@@ -755,21 +1356,9 @@ app.registerExtension({
       dialog.querySelector(".mb-enhancer-seed").value = previous.seed;
       dialog.querySelector(".mb-enhancer-sampling").value = previous.sampling_mode;
       dialog.querySelector(".mb-enhancer-mtp").value = previous.mtp;
-      dialog.querySelector(".mb-enhancer-thinking").checked = previous.thinking;
+      dialog.querySelector(".mb-enhancer-reasoning").value = previous.reasoning_effort;
       dialog.querySelector(".mb-enhancer-template").checked = previous.use_default_template;
-      try {
-        const response = await fetch(enhancerOptionsUrl(), { credentials: "same-origin" });
-        const options = await response.json();
-        if (!response.ok) throw new Error(options.error || "Could not check the connected CLIP input.");
-        dialog.querySelector(".mb-enhancer-clip-status").textContent = options.clip_available
-          ? `Connected CLIP: ${options.clip_name}`
-          : clipSocketConnected()
-            ? "CLIP is connected, but its model object is not cached yet. Run the workflow and wait for it to finish."
-            : "No CLIP input is connected. Connect a CLIP encoder, then run the workflow once.";
-        if (!promptField.value && options.default_system_prompt) promptField.value = options.default_system_prompt;
-      } catch (error) {
-        dialog.querySelector(".mb-enhancer-error").textContent = error.message || String(error);
-      }
+      dialog.querySelector(".mb-enhancer-jinja").checked = previous.use_jinja_template;
       dialog.querySelector(".mb-enhancer-save").onclick = () => {
         state.promptEnhancerSettings = enhancerSettings({
           max_length: dialog.querySelector(".mb-enhancer-max").value,
@@ -782,47 +1371,53 @@ app.registerExtension({
           seed: dialog.querySelector(".mb-enhancer-seed").value,
           sampling_mode: dialog.querySelector(".mb-enhancer-sampling").value,
           mtp: dialog.querySelector(".mb-enhancer-mtp").value,
-          thinking: dialog.querySelector(".mb-enhancer-thinking").checked,
+          reasoning_effort: dialog.querySelector(".mb-enhancer-reasoning").value,
           use_default_template: dialog.querySelector(".mb-enhancer-template").checked,
+          use_jinja_template: dialog.querySelector(".mb-enhancer-jinja").checked,
           system_prompt: promptField.value,
+          edit_system_prompt: previous.edit_system_prompt,
+          geometry_system_prompt: previous.geometry_system_prompt,
+          field_prompts: fieldPrompts,
+          context_mode: previous.context_mode,
         });
         syncWidgets();
         close();
       };
-    }
-    function replacePromptText(values) {
-      if (typeof values?.["summary.caption"] === "string") summary.value = values["summary.caption"];
-      const metaParts = sourceMetaParts();
-      meta.value = metaParts.map((entry, index) => values?.[`summary.meta.${index}`] ?? entry).join(", ");
-      state.items.forEach((item, index) => {
-        if (!item || typeof item !== "object") return;
-        for (const field of ["caption", "text"]) {
-          const value = values?.[`item.${index}.${field}`];
-          if (typeof value !== "string") continue;
-          if (field === "text" && !value.trim()) delete item.text;
-          else item[field] = value;
+      try {
+        const response = await fetch(enhancerOptionsUrl(), { credentials: "same-origin" });
+        const options = await response.json();
+        if (!response.ok) throw new Error(options.error || "Could not check the connected CLIP input.");
+        defaultFieldPrompts = options.default_field_prompts || {};
+        const clipStatus = dialog.querySelector(".mb-enhancer-clip-status");
+        if (!clipSocketConnected()) clipStatus.textContent = "No CLIP input is connected. Connect a CLIP encoder to this node.";
+        else if (!options.clip_available) clipStatus.textContent = "CLIP is connected. Template support is checked when the text job runs.";
+        else {
+          const templateState = options.jinja_template_available
+            ? " · tokenizer Jinja template available"
+            : " · no tokenizer Jinja template found";
+          clipStatus.textContent = `Connected CLIP: ${options.clip_name}${templateState}`;
         }
-        if (Array.isArray(item.tags)) {
-          item.tags = item.tags.map((entry, tagIndex) => values?.[`item.${index}.tags.${tagIndex}`] ?? entry);
-        }
-      });
-      sourceSummary = summary.value;
-      sourceMeta = meta.value;
-      if (linkedInput(node, "layout_text") && state.lastLayoutInputHash) {
-        state.suppressLayoutInput = true;
-        state.suppressLayoutHash = state.lastLayoutInputHash;
+        const promptFingerprint = (value) => String(value || "").replace(/\s+/g, " ").trim();
+        const isPreviousBuiltIn = (options.legacy_default_system_prompts || []).some((value) => promptFingerprint(value) === promptFingerprint(promptField.value));
+        if ((!promptField.value.trim() || isPreviousBuiltIn) && options.default_system_prompt) promptField.value = options.default_system_prompt;
+      } catch (error) {
+        dialog.querySelector(".mb-enhancer-error").textContent = error.message || String(error);
       }
-      syncWidgets();
-      renderSidebar();
-      draw();
     }
     function displayItems() { return state.items; }
     function refreshTranslationStatus() {
-      $(".mb-translation-status").textContent = translationBusy ? "Translating…" : enhancerBusy ? "Enhancing text…" : autoTranslate ? "Auto-translate on run" : "Prompt ready";
+      const status = $(".mb-translation-status");
+      const action = runningAction ?? pendingActions.values().next().value;
+      const waiting = pendingActions.size - Number(Boolean(runningAction));
+      status.textContent = action ? `${action.status}${waiting > 0 ? ` · ${waiting} queued` : ""}`
+        : activeOperationStatus || "Prompt ready";
+      if (action) setEnhancerProgress(action.progress);
+      status.title = status.textContent;
     }
     function syncWidgets() {
       sourceSummary = summary.value;
       sourceMeta = meta.value;
+      delete state.mossQueuedAction;
       delete state.translated;
       delete state.translationView;
       refreshTranslationStatus();
@@ -839,12 +1434,13 @@ app.registerExtension({
       state.coordinateSpace = "workspace";
       state.orientation = landscapeOrientation ? "landscape" : "portrait";
       state.workspaceAspect = 1;
-      state.autoTranslate = autoTranslate;
+      delete state.autoTranslate;
       if (canvasType.value) state.summaryCanvas = canvasType.value;
       else delete state.summaryCanvas;
       state.backgroundOpacity = backgroundOpacity;
       state.backgroundVisible = backgroundVisible;
       setValue(node, "portrait", landscapeOrientation);
+      updateContextControl();
       setValue(node, "prompt_enhancer_settings", JSON.stringify(state.promptEnhancerSettings || {}));
       savedState.value = JSON.stringify(state);
       setValue(node, "editor_state", savedState.value);
@@ -984,7 +1580,7 @@ app.registerExtension({
         const [x1, y1, x2, y2] = boxPx(item.bbox || [0, 0, 1, 1]);
         const color = visualBoxColor(item);
         ctx.fillStyle = color; ctx.globalAlpha = .13; ctx.fillRect(x1, y1, x2 - x1, y2 - y1); ctx.globalAlpha = 1;
-        ctx.strokeStyle = color; ctx.lineWidth = index === selected ? 2.6 : 1.7; ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+        ctx.strokeStyle = color; ctx.globalAlpha = index === selected ? .72 : .56; ctx.lineWidth = index === selected ? 2.6 : 1.7; ctx.strokeRect(x1, y1, x2 - x1, y2 - y1); ctx.globalAlpha = 1;
         const boxWidth = Math.max(0, x2 - x1), boxHeight = Math.max(0, y2 - y1);
         const palette=(item.palette||[]).filter(c=>/^#[0-9a-f]{6}$/i.test(c));
         ctx.save(); ctx.beginPath(); ctx.rect(x1, y1, boxWidth, boxHeight); ctx.clip();
@@ -1015,9 +1611,10 @@ app.registerExtension({
         const bandY = y1 + Math.min(7, boxHeight), bandHeight = Math.min(Math.max(0, boxHeight - Math.min(7, boxHeight)), lines.length * lineHeight + 3);
         const smallBox = boxWidth < 70 || boxHeight < 22;
         if (!smallBox) {
-          ctx.fillStyle = "rgba(12,16,18,.78)"; ctx.fillRect(x1, bandY, boxWidth, bandHeight);
-          ctx.fillStyle = "#e3e9eb";
+          ctx.fillStyle = "rgba(12,16,18,.58)"; ctx.fillRect(x1, bandY, boxWidth, bandHeight);
+          ctx.fillStyle = "#e3e9eb"; ctx.globalAlpha = .72;
           lines.forEach((text, i) => ctx.fillText(text, x1 + 4, bandY + 10 + i * lineHeight, textWidth));
+          ctx.globalAlpha = 1;
         }
         ctx.restore();
         if (smallBox) {
@@ -1031,8 +1628,8 @@ app.registerExtension({
           const badgeWidth = Math.min(badgeMaxWidth, ctx.measureText(fittedText).width + 10);
           const badgeX = Math.max(4, Math.min(CW - badgeWidth - 4, x1));
           const badgeY = y1 >= 18 ? y1 - 17 : Math.min(CH - 15, y2 + 2);
-          ctx.fillStyle = "rgba(12,16,18,.88)"; ctx.fillRect(badgeX, badgeY, badgeWidth, 14);
-          ctx.fillStyle = "#e3e9eb"; ctx.fillText(fittedText, badgeX + 5, badgeY + 10, badgeWidth - 10);
+          ctx.fillStyle = "rgba(12,16,18,.62)"; ctx.fillRect(badgeX, badgeY, badgeWidth, 14);
+          ctx.fillStyle = "#e3e9eb"; ctx.globalAlpha = .72; ctx.fillText(fittedText, badgeX + 5, badgeY + 10, badgeWidth - 10); ctx.globalAlpha = 1;
           ctx.restore();
         }
         if (index === selected) {
@@ -1056,17 +1653,30 @@ app.registerExtension({
 
     function saveState() { savedState.value = JSON.stringify(state); syncWidgets(); draw(); }
     function renderSidebar(){const list=$(".mb-elements");list.innerHTML="";displayItems().forEach((item,i)=>{const b=document.createElement("button");b.type="button";b.className="mb-element"+(i===selected?" selected":"");b.textContent=`${TYPE_NAME[item.label]||"Object"} ${i+1}: ${item.caption||item.text||"(no description)"}`;b.onclick=()=>{selected=i;canvas.focus();draw();};b.ondblclick=()=>openEditor(i,innerWidth/2,innerHeight/2);list.append(b);});const pal=$(".mb-global-palette");pal.innerHTML="";summaryPalette.forEach((color,i)=>{const chip=document.createElement("span");chip.className="mb-color-chip";chip.innerHTML=`<input type="color" value="${/^#[0-9a-f]{6}$/i.test(color)?color:"#b4c0c5"}"><button type="button" title="Remove color">×</button>`;chip.querySelector("input").oninput=e=>{summaryPalette[i]=e.target.value;syncWidgets();};chip.querySelector("button").onclick=()=>{summaryPalette.splice(i,1);syncWidgets();draw();};pal.append(chip);});}
-    async function openTranslationDialog() {
-      if (translationBusy || enhancerBusy) return;
-      const segments = buildTranslationSegments();
-      if (!segments.length) { $(".mb-translation-status").textContent = "Add prompt text before translating"; return; }
+    function translateFields(fields) {
+      fields = fields.filter((field) => typeof field?.text === "string" && field.text.trim());
+      if (!fields.length) { $(".mb-translation-status").textContent = "Add text to a field before translating"; return; }
+      const settings = translationSettings(state.translationSettings || {});
+      state.translationSettings = settings;
+      syncWidgets();
+      const segments = fields.map((field) => ({ id: field.id, text: field.text }));
+      return runTextAction("translate", { segments, settings }, fields, "Translating", {
+        apply: (result, snapshots) => {
+          const { applied, skipped } = applyActionValues(snapshots, result);
+          if (applied) saveState();
+          const status = applied ? `Translated ${applied} field${applied === 1 ? "" : "s"}` : "No fields changed";
+          return skipped ? `${status} · ${skipped} changed after submission` : status;
+        },
+      });
+    }
+    async function openTranslationSettings() {
       const shade = document.createElement("div"); shade.className = "mb-modal-shade mb-translation-shade";
       const dialog = document.createElement("div"); dialog.className = "mb-modal mb-translation-modal"; dialog.setAttribute("role", "dialog"); dialog.setAttribute("aria-modal", "true");
-      dialog.innerHTML = `<h3>Translate and replace layout text</h3><label>Source language</label><select class="mb-source-language"><option>Auto Detect</option></select><label>Target language</label><select class="mb-target-language"></select><label>TranslateGemma model</label><select class="mb-model-size"><option>4B</option><option>12B</option><option>27B</option></select><details class="mb-translation-advanced"><summary>Advanced settings</summary><label>Device</label><select class="mb-device"><option value="default">Default</option><option value="cpu">CPU</option></select><label>Prompt mode</label><select class="mb-prompt-mode"><option value="auto">Auto</option><option value="structured">Structured</option><option value="plain">Plain</option></select><label>Quantization</label><select class="mb-quantization"><option value="none">None</option><option value="bnb-8bit">8-bit</option><option value="bnb-4bit">4-bit</option></select><label>Max input tokens (0 = automatic)</label><input class="mb-max-input" type="number" min="0" max="8192" value="0"><label>Max new tokens (0 = automatic)</label><input class="mb-max-new" type="number" min="0" max="8192" value="0"><label><input class="mb-keep-loaded" type="checkbox" checked> Keep model loaded after translation</label></details><div class="mb-translation-message">Translation replaces the summary, metadata, and box text in the node. The original wording is not retained. The first run may download model weights.</div><div class="mb-modal-buttons"><button class="mb-translation-cancel">Cancel</button><span></span><button class="primary mb-translation-run">Translate & replace</button></div>`;
+      dialog.innerHTML = `<h3>Translation settings</h3><div class="mb-modal-help">These settings are shared by Translate all and the field translation icons.</div><label>Source language</label><select class="mb-source-language"><option>Auto Detect</option></select><label>Target language</label><select class="mb-target-language"></select><label>TranslateGemma model</label><select class="mb-model-size"><option>4B</option><option>12B</option><option>27B</option></select><details class="mb-translation-advanced"><summary>Advanced settings</summary><label>Device</label><select class="mb-device"><option value="default">Default</option><option value="cpu">CPU</option></select><label>Prompt mode</label><select class="mb-prompt-mode"><option value="auto">Auto</option><option value="structured">Structured</option><option value="plain">Plain</option></select><label>Quantization</label><select class="mb-quantization"><option value="none">None</option><option value="bnb-8bit">8-bit</option><option value="bnb-4bit">4-bit</option></select><label>Max input tokens (0 = automatic)</label><input class="mb-max-input" type="number" min="0" max="8192" value="0"><label>Max new tokens (0 = automatic)</label><input class="mb-max-new" type="number" min="0" max="8192" value="0"><label><input class="mb-keep-loaded" type="checkbox" checked> Keep model loaded after translation</label></details><div class="mb-translation-message" aria-live="polite">TranslateGemma runs locally. The first run may download model weights.</div><div class="mb-modal-buttons"><button class="mb-translation-cancel">Cancel</button><span></span><button class="primary mb-translation-save-settings">Save settings</button></div>`;
       shade.append(dialog); document.body.append(shade);
       const closeButton = document.createElement("button"); closeButton.type = "button"; closeButton.className = "mb-modal-close"; closeButton.title = "Close"; closeButton.setAttribute("aria-label", "Close"); closeButton.textContent = "×"; dialog.insertBefore(closeButton, dialog.firstChild);
       const sourceSelect = dialog.querySelector(".mb-source-language"), targetSelect = dialog.querySelector(".mb-target-language");
-      const message = dialog.querySelector(".mb-translation-message"), run = dialog.querySelector(".mb-translation-run");
+      const message = dialog.querySelector(".mb-translation-message"), saveSettingsButton = dialog.querySelector(".mb-translation-save-settings");
       const collectSettings = () => translationSettings({
         source_language: sourceSelect.value, target_language: targetSelect.value,
         model_size: dialog.querySelector(".mb-model-size").value,
@@ -1076,9 +1686,6 @@ app.registerExtension({
         max_new_tokens: dialog.querySelector(".mb-max-new").value,
         keep_model_loaded: dialog.querySelector(".mb-keep-loaded").checked,
       });
-      const saveSettingsButton = document.createElement("button");
-      saveSettingsButton.type = "button"; saveSettingsButton.className = "mb-translation-save-settings"; saveSettingsButton.textContent = "Save settings";
-      run.parentElement.insertBefore(saveSettingsButton, run);
       saveSettingsButton.onclick = () => { state.translationSettings = collectSettings(); syncWidgets(); close(); };
       const previous = translationSettings(state.translationSettings || {});
       dialog.querySelector(".mb-model-size").value = previous.model_size;
@@ -1107,31 +1714,8 @@ app.registerExtension({
         if (Array.isArray(payload.devices)) for (const device of payload.devices) if (!["default", "cpu"].includes(device)) dialog.querySelector(".mb-device").add(new Option(device, device));
       } catch (error) {
         message.textContent = "Could not load translation options: " + (error.message || String(error));
-        run.disabled = true;
+        saveSettingsButton.disabled = true;
       }
-      run.addEventListener("click", async () => {
-        const settings = collectSettings();
-        state.translationSettings = settings;
-        syncWidgets();
-        const currentSegments = buildTranslationSegments();
-        translationBusy = true; refreshTranslationStatus(); run.disabled = true; message.textContent = "Translating… This may take a few minutes on the first run.";
-        try {
-          const url = typeof app.api?.apiURL === "function" ? app.api.apiURL("/moss_layout_ydr/translation/run") : "/moss_layout_ydr/translation/run";
-          const response = await fetch(url, { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ segments: currentSegments, settings }) });
-          const result = await response.json();
-          if (!response.ok || result.status !== "ready") throw new Error(result.error || "Translation failed.");
-          if (result.source_key !== translationSourceKey(currentSegments, settings)) throw new Error("The translated result did not match the current text/settings. Please retry.");
-          state.translationSettings = result.settings;
-          replacePromptText(result.values || {});
-          $(".mb-translation-status").textContent = "Translation replaced prompt text";
-          close();
-        } catch (error) {
-          message.textContent = error.message || String(error);
-          run.disabled = false;
-        } finally {
-          translationBusy = false; refreshTranslationStatus();
-        }
-      });
     }
     function hitItemsAt(x, y) {
       const hits = [];
@@ -1187,16 +1771,34 @@ app.registerExtension({
       dialog.innerHTML = `<h3>Edit ${TYPE_NAME[item.label] || "Object"}</h3>
         <label title="MOSS item label controls whether the box describes an object, a character, or visible text.">Element type</label>
         <select class="mb-kind"><option value="object">Object</option><option value="character">Character</option><option value="text">Text</option></select>
-        <div class="mb-caption-wrap"><div class="mb-field-head"><label title="Describe the visible appearance and details inside this region.">Description</label><div class="mb-field-actions"><button class="mb-enhance-field mb-enhance-caption" type="button" title="Generate improved text for only this box description">Generate</button></div></div><textarea class="mb-caption" placeholder="Describe the visible appearance, pose, materials, or typography…"></textarea><div class="mb-modal-help">This caption describes what should appear inside this box.</div></div>
-        <div class="mb-exact-wrap"><div class="mb-field-head"><label title="Enter the exact visible characters. Preserve line breaks when needed.">Exact visible text</label><div class="mb-field-actions"><button class="mb-enhance-field mb-enhance-exact" type="button" title="Generate an improved version of only this exact visible text">Generate</button></div></div><textarea class="mb-exact" placeholder="Type the exact words to render…"></textarea><div class="mb-modal-help">Required for a Text element. Keep exact spelling and line breaks here.</div></div>
-        <div class="mb-field-head"><label title="Optional visual tags for this item, separated by commas.">Tags <span class="mb-modal-help">Optional comma-separated visual tags</span></label><div class="mb-field-actions"><button class="mb-enhance-field mb-enhance-tags" type="button" title="Generate improved tags for only this box">Generate</button></div></div><input class="mb-tags" placeholder="e.g. foreground, warm lighting"/>
+        <div class="mb-caption-wrap"><div class="mb-field-head"><label title="Describe the visible appearance and details inside this region.">Description</label><div class="mb-field-actions"><button class="mb-translate-field mb-translate-caption" type="button" aria-label="Translate box description" title="Translate only this box description">${TRANSLATE_ICON}</button><button class="mb-enhance-field mb-enhance-caption" type="button" title="Generate improved text for only this box description">Generate</button></div></div><textarea class="mb-caption" placeholder="Describe the visible appearance, pose, materials, or typography…"></textarea><div class="mb-modal-help">This caption describes what should appear inside this box.</div></div>
+        <div class="mb-exact-wrap"><div class="mb-field-head"><label title="Enter the exact visible characters. Preserve line breaks when needed.">Exact visible text</label><div class="mb-field-actions"><button class="mb-translate-field mb-translate-exact" type="button" aria-label="Translate exact visible text" title="Translate only this field">${TRANSLATE_ICON}</button><button class="mb-enhance-field mb-enhance-exact" type="button" title="Generate an improved version of only this exact visible text">Generate</button></div></div><textarea class="mb-exact" placeholder="Type the exact words to render…"></textarea><div class="mb-modal-help">Required for a Text element. Keep exact spelling and line breaks here.</div></div>
+        <div class="mb-field-head"><label title="Optional visual tags for this item, separated by commas.">Tags <span class="mb-modal-help">Optional comma-separated visual tags</span></label><div class="mb-field-actions"><button class="mb-translate-field mb-translate-tags" type="button" aria-label="Translate box tags" title="Translate only these tags">${TRANSLATE_ICON}</button><button class="mb-enhance-field mb-enhance-tags" type="button" title="Generate improved tags for only this box">Generate</button></div></div><input class="mb-tags" placeholder="e.g. foreground, warm lighting"/>
         <label title="Optional colors associated with this box.">Palette <span class="mb-modal-help">Choose colors for this element. Colors appear as a stripe on its box.</span></label><div class="mb-item-palette"></div><div class="mb-palette-tools"><button class="mb-add-item-color" type="button">＋ Add color</button></div>
         <div class="mb-modal-buttons"><button class="danger mb-delete">Delete box</button><span></span><button class="mb-cancel">Cancel</button><button class="primary mb-save">Save</button></div>`;
       shade.append(dialog); document.body.append(shade);
       const kind = dialog.querySelector(".mb-kind"), caption = dialog.querySelector(".mb-caption"), exact = dialog.querySelector(".mb-exact");
+      const tagsControl = dialog.querySelector(".mb-tags");
       const captionWrap = dialog.querySelector(".mb-caption-wrap"), exactWrap = dialog.querySelector(".mb-exact-wrap");
       kind.value = item.label || "object"; caption.value = item.caption || ""; exact.value = item.text || "";
-      dialog.querySelector(".mb-tags").value = (item.tags || []).join(", ");
+      tagsControl.value = (item.tags || []).join(", ");
+      const savedText = (field) => field === "tags" ? (item.tags || []).join(", ") : item[field] || "";
+      const textControls = { caption, text: exact, tags: tagsControl };
+      const editor = {
+        readSaved: () => Object.fromEntries(Object.keys(textControls).map((field) => [field, savedText(field)])),
+        refresh: (before) => {
+          for (const [field, control] of Object.entries(textControls)) {
+            if (control.value === before[field]) control.value = savedText(field);
+          }
+        },
+      };
+      openBoxTextEditor = editor;
+      const currentText = (field, control) => {
+        if (!state.items.includes(item)) return null;
+        if (!shade.isConnected) return savedText(field);
+        if (field === "tags") return sourceMetaParts(control.value).join(", ");
+        return field === "caption" ? control.value.trim() : control.value;
+      };
       let draftPalette = [...(item.palette || [])]; const paletteHost=dialog.querySelector(".mb-item-palette"); const renderPalette=()=>{paletteHost.innerHTML="";draftPalette.forEach((color,i)=>{const chip=document.createElement("span");chip.className="mb-color-chip";chip.innerHTML=`<input type="color" value="${/^#[0-9a-f]{6}$/i.test(color)?color:"#9eafb4"}"><button type="button" title="Remove color">×</button>`;chip.querySelector("input").oninput=e=>draftPalette[i]=e.target.value;chip.querySelector("button").onclick=()=>{draftPalette.splice(i,1);renderPalette();};paletteHost.append(chip);});};renderPalette();
       const updateType = () => {
         captionWrap.querySelector("label").textContent = kind.value === "text" ? "Text description and style" : "Description";
@@ -1208,16 +1810,56 @@ app.registerExtension({
       updateType(); kind.addEventListener("change", updateType);
       const enhanceModalField = (selector, control, field, fieldType) => {
         const button = dialog.querySelector(selector);
-        button.addEventListener("click", () => enhanceFields([{
-          id: `item.${index}.${field}`, type: typeof fieldType === "function" ? fieldType() : fieldType,
-          text: control.value, current: () => control.value,
-          apply: (value) => { control.value = value; },
-        }], button));
+        button.addEventListener("click", () => {
+          saveItem(false); saveState();
+          enhanceFields([{
+            id: `item.${index}.${field}`, type: typeof fieldType === "function" ? fieldType() : fieldType,
+            text: control.value, current: () => currentText(field, control),
+            apply: (value) => {
+              control.value = value;
+              if (!state.items.includes(item)) return;
+              if (field === "caption") item.caption = value;
+              else if (field === "text") { if (value.trim()) item.text = value; else delete item.text; }
+              else if (field === "tags") item.tags = value.split(",").map((tag) => tag.trim()).filter(Boolean);
+            },
+          }]);
+        });
       };
       enhanceModalField(".mb-enhance-caption", caption, "caption", () => `${TYPE_NAME[kind.value] || "Object"} description`);
       enhanceModalField(".mb-enhance-exact", exact, "text", "exact visible text");
-      enhanceModalField(".mb-enhance-tags", dialog.querySelector(".mb-tags"), "tags", "box tags");
-      const close = () => shade.remove();
+      enhanceModalField(".mb-enhance-tags", tagsControl, "tags", "box tags");
+      const translateModalField = (selector, control, field) => {
+        dialog.querySelector(selector).addEventListener("click", () => {
+          saveItem(false);
+          if (!state.items.includes(item)) return;
+          if (field === "caption") control.value = item.caption || "";
+          else if (field === "text") control.value = item.text || "";
+          else control.value = (item.tags || []).join(", ");
+          saveState();
+          if (field === "tags") {
+            const tagFields = gatherTranslationFields().filter((entry) => entry.id.startsWith(`item.${index}.tags.`));
+            const boundFields = tagFields.map((entry) => ({
+              ...entry,
+              current: () => sourceMetaParts(currentText("tags", control))[Number(entry.id.split(".").at(-1))] ?? null,
+              apply: (value) => { entry.apply(value); control.value = savedText("tags"); },
+            }));
+            translateFields(boundFields);
+            return;
+          }
+          translateFields([{
+            id: `item.${index}.${field}`, text: control.value,
+            current: () => currentText(field, control),
+              apply: (value) => { control.value = value; if (!state.items.includes(item)) return; if (field === "caption") item.caption = value; else item.text = value; },
+          }]);
+        });
+      };
+      translateModalField(".mb-translate-caption", caption, "caption");
+      translateModalField(".mb-translate-exact", exact, "text");
+      translateModalField(".mb-translate-tags", tagsControl, "tags");
+      const close = () => {
+        if (openBoxTextEditor === editor) openBoxTextEditor = undefined;
+        shade.remove();
+      };
       shade.addEventListener("pointerdown", (event) => { if (event.target === shade) { saveItem(false); saveState(); close(); } });
       dialog.querySelector(".mb-cancel").onclick = close;
       const closeButton = document.createElement("button");
@@ -1233,6 +1875,7 @@ app.registerExtension({
           return false;
         }
         const palette = draftPalette;
+        if (!state.items.includes(item)) return false;
         item.label = kind.value;
         item.caption = captionValue;
         if (exactValue.trim()) item.text = exactValue; else delete item.text;
@@ -1375,7 +2018,7 @@ app.registerExtension({
         suppressLayoutHash: inputLinked ? (state.lastLayoutInputHash || "") : "",
       };
       selected = -1; sampleMode = null; summary.value = ""; meta.value = ""; sourceSummary = ""; sourceMeta = ""; canvasType.value = ""; summaryPalette = []; recentColors = [];
-      autoTranslate = false; state.autoTranslate = false; delete state.translationSettings; autoTranslateToggle.checked = false;
+      delete state.autoTranslate; delete state.translationSettings;
       landscapeOrientation = false;
       ratioSelect.value = "1:1"; mpSelect.value = "1 MP"; mpInput.value = "1"; wInput.value = "1024"; hInput.value = "1024";
       syncWidgets(); draw();
@@ -1394,11 +2037,18 @@ app.registerExtension({
     summary.addEventListener("input",syncWidgets);
     meta.addEventListener("input",syncWidgets);
     canvasType.addEventListener("change",syncWidgets);
-    $(".mb-translate-open").addEventListener("click",openTranslationDialog);
+    contextSlider?.addEventListener("input", () => {
+      const settings = enhancerSettings(state.promptEnhancerSettings || {});
+      settings.context_mode = CONTEXT_MODES[Number(contextSlider.value)] || "full";
+      state.promptEnhancerSettings = enhancerSettings(settings);
+      updateContextControl();
+      syncWidgets();
+    });
+    $(".mb-translate-all").addEventListener("click", () => translateFields(gatherTranslationFields()));
+    $(".mb-translate-settings").addEventListener("click",openTranslationSettings);
     root.querySelectorAll(".mb-enhancer-settings").forEach((button) => button.addEventListener("click",openEnhancerSettings));
     const originalOnRemoved = node.onRemoved;
     node.onRemoved = function (...args) {
-      clearInterval(enhancerProgressTimer);
       clearTimeout(enhancerProgressHideTimer);
       const removedNodeId = String(node.id);
       // ComfyUI can tear down and rebuild frontend node instances while loading
@@ -1418,18 +2068,20 @@ app.registerExtension({
       }, 1500);
       return originalOnRemoved?.apply(this, args);
     };
-    $(".mb-enhance-field[data-enhance-target='summary']").addEventListener("click", (event) => enhanceFields([{
+    $(".mb-enhance-field[data-enhance-target='summary']").addEventListener("click", () => enhanceFields([{
       id: "summary.caption", type: "whole-image summary", text: summary.value,
-      current: () => summary.value, apply: (value) => { summary.value = value; },
-    }], event.currentTarget));
-    $(".mb-enhance-field[data-enhance-target='meta']").addEventListener("click", (event) => enhanceFields([{
+      current: () => summary.value, apply: (value) => showReplacedText(summary, value),
+    }]));
+    $(".mb-enhance-field[data-enhance-target='meta']").addEventListener("click", () => enhanceFields([{
       id: "summary.meta", type: "summary metadata tags", text: meta.value,
       current: () => meta.value, apply: (value) => { meta.value = value; },
-    }], event.currentTarget));
-    $(".mb-enhance-all").addEventListener("click", (event) => enhanceFields(gatherEnhanceAllFields(), event.currentTarget));
-    autoTranslateToggle.addEventListener("change",()=>{autoTranslate=autoTranslateToggle.checked;syncWidgets();});
+    }]));
+    $(".mb-translate-field[data-translate-target='summary']").addEventListener("click", () => translateFields(gatherTranslationFields().filter((field) => field.id === "summary.caption")));
+    $(".mb-translate-field[data-translate-target='meta']").addEventListener("click", () => translateFields(gatherTranslationFields().filter((field) => field.id.startsWith("summary.meta."))));
+    $(".mb-enhance-all").addEventListener("click", () => enhanceFields(gatherEnhanceAllFields()));
+    $(".mb-edit-matching").addEventListener("click", openTargetedEditDialog);
     $(".mb-add-summary-color").addEventListener("click",(event)=>openColorPopover(event.currentTarget,(color)=>{summaryPalette.push(color);rememberColor(color);syncWidgets();draw();},recentColors));$(".mb-pick-summary").addEventListener("click",()=>{sampleMode={target:summaryPalette};canvas.style.cursor="copy";$(".mb-preview-note").textContent="Click the preview to sample a color";});
-    savedState.addEventListener("input",()=>{try{const parsed=JSON.parse(savedState.value);if(Array.isArray(parsed.items)){state=migrateLegacyTranslation(node,mergeSavedEnhancerSettings(node,parsed));summary.value=getValue(node,"summary","");meta.value=getValue(node,"summary_meta","");sourceSummary=summary.value;sourceMeta=meta.value;autoTranslate=state.autoTranslate===true;autoTranslateToggle.checked=autoTranslate;summaryPalette=Array.isArray(state.summaryPalette)?state.summaryPalette:[];recentColors=Array.isArray(state.recentColors)?state.recentColors.filter((color)=>/^#[0-9a-f]{6}$/i.test(color)).slice(0,10):[];backgroundOpacity=clampPercent(state.backgroundOpacity);backgroundVisible=state.backgroundVisible!==false;opacitySlider.value=String(backgroundOpacity);updateBackgroundControls();selected=-1;savedState.value=JSON.stringify(state);setValue(node,"editor_state",savedState.value);setValue(node,"prompt_enhancer_settings",JSON.stringify(state.promptEnhancerSettings||{}));refreshTranslationStatus();draw();}}catch{}});
+    savedState.addEventListener("input",()=>{try{const parsed=JSON.parse(savedState.value);if(Array.isArray(parsed.items)){state=migrateLegacyTranslation(node,mergeSavedEnhancerSettings(node,parsed));delete state.autoTranslate;summary.value=getValue(node,"summary","");meta.value=getValue(node,"summary_meta","");sourceSummary=summary.value;sourceMeta=meta.value;summaryPalette=Array.isArray(state.summaryPalette)?state.summaryPalette:[];recentColors=Array.isArray(state.recentColors)?state.recentColors.filter((color)=>/^#[0-9a-f]{6}$/i.test(color)).slice(0,10):[];backgroundOpacity=clampPercent(state.backgroundOpacity);backgroundVisible=state.backgroundVisible!==false;opacitySlider.value=String(backgroundOpacity);updateBackgroundControls();selected=-1;savedState.value=JSON.stringify(state);setValue(node,"editor_state",savedState.value);setValue(node,"prompt_enhancer_settings",JSON.stringify(state.promptEnhancerSettings||{}));refreshTranslationStatus();draw();}}catch{}});
     stateToggle.addEventListener("click",()=>{savedState.classList.toggle("open");stateToggle.textContent=savedState.classList.contains("open")?"Advanced ▾":"Advanced ▸";});
 
     function setPreview(ref, label="Latest image preview", force=false) {
@@ -1658,19 +2310,23 @@ app.registerExtension({
     window.addEventListener("moss-layout-size", onBackendSize);
     const onBackendLayout = (event) => {
       const eventId = String(event.detail?.nodeId ?? "").split(":").at(-1);
-      if (eventId === String(node.id).split(":").at(-1)) applyBackendLayout(event.detail?.output);
+      const output = event.detail?.output;
+      if (eventId === String(node.id).split(":").at(-1)) applyBackendLayout(output);
     };
     window.addEventListener("moss-layout-import", onBackendLayout);
     const onBackendReplacement = (event) => {
       const eventId = String(event.detail?.nodeId ?? "").split(":").at(-1);
-      if (eventId === String(node.id).split(":").at(-1)) applyBackendReplacement(event.detail?.output);
+      const output = event.detail?.output;
+      if (eventId === String(node.id).split(":").at(-1)) applyBackendReplacement(output);
     };
     window.addEventListener("moss-layout-replace", onBackendReplacement);
     function restoreConfiguredState() {
+      updateDefaultTitle();
       // The DOM editor is created before ComfyUI restores widgets_values.
       // Rebuild it after configure so execution callbacks do not overwrite the
       // restored workflow values with the temporary defaults shown at creation.
       state = readState(node);
+      delete state.mossQueuedAction;
       summaryPalette = Array.isArray(state.summaryPalette) ? state.summaryPalette : [];
       recentColors = Array.isArray(state.recentColors) ? state.recentColors.filter((color) => /^#[0-9a-f]{6}$/i.test(color)).slice(0, 10) : [];
       backgroundOpacity = clampPercent(state.backgroundOpacity);
@@ -1690,11 +2346,12 @@ app.registerExtension({
       summary.value = getValue(node, "summary", "");
       meta.value = getValue(node, "summary_meta", "");
       sourceSummary = summary.value; sourceMeta = meta.value;
-      autoTranslate = state.autoTranslate === true; autoTranslateToggle.checked = autoTranslate;
+      delete state.autoTranslate;
       canvasType.value = ["single", "multi_panel", "collage"].includes(state.summaryCanvas) ? state.summaryCanvas : "";
       delete state.translated;
       delete state.translationView;
       canvasType.value = ["single", "multi_panel", "collage"].includes(state.summaryCanvas) ? state.summaryCanvas : "";
+      updateContextControl();
       opacitySlider.value = String(backgroundOpacity);
       migrateItemsToWorkspace();
       savedState.value = JSON.stringify(state);
@@ -1776,10 +2433,9 @@ app.registerExtension({
   },
   afterConfigureGraph() {
     for (const node of collectNodes(app.graph)) {
-      if (node.comfyClass === "MOSSLayoutComposer" || node.type === "MOSSLayoutComposer") {
+      if (NODE_TYPES.has(node.comfyClass) || NODE_TYPES.has(node.type)) {
         node.mossLayoutYdrRestore?.();
       }
     }
   },
 });
-

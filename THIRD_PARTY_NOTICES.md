@@ -10,7 +10,7 @@ This distribution is consequently provided under GPL-3.0-only. The full license 
 
 ## TranslateGemma
 
-The optional, locally run text-translation engine is adapted from [rookiestar28/ComfyUI-TranslateGemma](https://github.com/rookiestar28/ComfyUI-TranslateGemma), pinned to commit [`268eb10a9b852249df4fe1ad2294d5c4d9261edc`](https://github.com/rookiestar28/ComfyUI-TranslateGemma/tree/268eb10a9b852249df4fe1ad2294d5c4d9261edc). The vendored source files are in [`vendor/translategemma/`](vendor/translategemma/) and retain their upstream MIT license in [`vendor/translategemma/LICENSE`](vendor/translategemma/LICENSE). Translation is lazy-loaded and its dependencies are optional; the layout editor does not require them.
+The optional, locally run text-translation engine is adapted from [rookiestar28/ComfyUI-TranslateGemma](https://github.com/rookiestar28/ComfyUI-TranslateGemma), pinned to commit [`268eb10a9b852249df4fe1ad2294d5c4d9261edc`](https://github.com/rookiestar28/ComfyUI-TranslateGemma/tree/268eb10a9b852249df4fe1ad2294d5c4d9261edc). The vendored source files are in [`vendor/translategemma/`](vendor/translategemma/) and retain their upstream MIT license in [`vendor/translategemma/LICENSE`](vendor/translategemma/LICENSE). MOSS Layout YDR uses local token progress callbacks and invokes TranslateGemma one field at a time. Translation is lazy-loaded and its dependencies are optional; the layout editor does not require them.
 
 TranslateGemma model weights are distributed separately by their publisher. Users must accept the model terms and follow its license before downloading or using the weights.
 

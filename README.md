@@ -19,15 +19,35 @@ A visual layout editor for MOSS-Image in ComfyUI. Draw regions on the image, des
 
 ## Install
 
-Download this repository and copy `ComfyUI-MOSS-Layout-YDR` into `ComfyUI/custom_nodes/`, then restart ComfyUI. Find **MOSS Layout YDR** under **MOSS/Layout**.
+Install **MOSS Layout YDR** from ComfyUI Manager or clone this repository into `ComfyUI/custom_nodes/`. Restart ComfyUI and find **MOSS Layout YDR** under **MOSS/Layout**.
+
+Version 0.2 brings the experimental editor into the main package. If you installed the separate Experimental package, disable it before restarting. Saved workflows from either version open with the main package.
 
 Translation is optional. To enable it, install [`requirements-translategemma.txt`](requirements-translategemma.txt) in the same Python environment as ComfyUI, then restart. ComfyUI's existing PyTorch installation is used. TranslateGemma downloads its selected model the first time it runs; translation itself runs locally. Accept the model's terms on Hugging Face before downloading its weights.
 
 ## Generate prompt text
 
-Use **Generate** beside Summary, Summary metadata, or a box field to rewrite only that field. Every request receives the complete layout context—summary, metadata, every box's label, coordinates, description, exact text, tags, and palette—so fields stay consistent. A box's own content and coordinates take priority over global text and other boxes, keeping subjects scoped to their intended region. **Generate all** processes the filled summary, metadata, box descriptions, exact visible text, and tags while leaving box geometry and labels untouched. Results replace the edited text in the workflow, just like manual edits.
+Use **Generate** beside Summary, Summary metadata, or a box field to rewrite that field. **Generate all** processes filled text fields. In **Edit**, enter a **Change Request** and optionally specify targets with keywords, **Add Field**, or both. Selecting a box includes all its filled text fields. With no keywords or manual selections, every filled field is selected. Edit remembers the last search terms and change request in the workflow.
 
-Connect the same **CLIP** output used by your **Generate Text** node to MOSS Layout YDR's **clip** input, then run the workflow once so the node can keep that encoder available for its in-node Generate buttons. The buttons reuse ComfyUI's native Generate Text engine. Open the single gear button to edit settings shared by every Generate button, including the system prompt; these settings are saved with the workflow. Run text generation while the ComfyUI queue is idle. The cached encoder reference is released when the node is removed or the workflow is run with its CLIP input disconnected.
+Expand **System Prompt (Edit)** inside **Edit** to change the instructions that guide text edits. These are added to the shared system and field prompts for each edit. The override is saved with the workflow, and **Reset to default** restores the built-in instructions. Edit accepts requests in any language and asks the model for the complete updated field in English, including exact visible text.
+
+Connect the same **CLIP** output used by your **Generate Text** node to MOSS Layout YDR's **clip** input. **Generate** and **Edit** submit a ComfyUI text job using the connected CLIP branch. The job can load the encoder on its first run.
+
+The context slider next to the settings gear offers **No context** (target field only), **Summary** (caption and metadata), and **Full layout** (summary and all boxes). **Text Generation Settings** shows the **System Prompt** first, followed by buttons for the shared **Summary**, **Summary Metadata**, **Character BBox**, **Object BBox**, and **Text BBox** prompts. **Generation Settings** includes reasoning, sampling, and an independent **Use tokenizer Jinja template** option. Jinja uses the connected tokenizer's own template when one is available. All these settings are saved with the workflow.
+
+Generate, Edit, and Translate show a progress ring and the current field in the editor. Use the ComfyUI queue controls to cancel a text job.
+
+You can queue more actions while a job is running. Each uses the fields and settings from submission. Results are applied in submission order, and direct edits made while a job is queued are preserved.
+
+### Adjust box geometry
+
+Open **Edit → Box Geometry**, select the boxes to move, resize, or reshape, and describe the change. For example, select the house box and enter *Make the house about the size of a mouse, keeping it on the ground.*
+
+With **Use current background** enabled, a vision-capable CLIP receives the full background with outlines for the selected boxes, plus their coordinates and descriptions. You can also run with coordinates and descriptions alone. The result updates the selected rectangles while preserving their text and colors.
+
+Expand **System Prompt (Box Geometry)** to customize the instructions for spatial edits. The built-in prompt explains the frame, coordinate order, reference outlines, and required JSON response. **Reset to default** restores it.
+
+Starting a normal image-generation workflow only composes and passes the authored prompt. It does not automatically run text generation, editing, or translation inside the node.
 
 Restart ComfyUI after updating. Existing saved workflows are migrated on load to show the new **clip** input and remove obsolete translated output sockets.
 
@@ -50,7 +70,7 @@ The workflow does not include model checkpoints. Install the models required by 
 
 ## Translate a layout
 
-Open **Translate & replace…** in the node's right-hand panel to choose languages and a TranslateGemma model size. Use **Save settings** to configure automatic translation, then enable **Auto on run**. Each workflow run translates the current summary, metadata, and box text and replaces them before outputs are produced. Turn the switch off after a one-time translation if you do not want the current wording translated again on later runs. The **Translate & replace…** button performs the same replacement immediately without queueing image generation. The node does not keep a second hidden copy of the original text, so save a workflow copy first if you need to preserve its original wording.
+Use **Translate all** to translate the filled summary, metadata, and box text. The translation icons beside individual fields translate only those fields. Both actions run from the editor and use the shared settings opened by the gear button. Translated text replaces the current wording. The node does not keep a second hidden copy of the original text, so save a workflow copy first if you need to preserve its original wording.
 
 Translation changes authored prose only; box coordinates, labels, colors, and composition settings stay fixed. Once replaced, translated text is ordinary editable node content and is saved with the workflow. The normal `prompt` and `draft_json` outputs contain the final text.
 

@@ -1,6 +1,6 @@
 # Example workflow
 
-Open [`moss-layout-ydr-moss-workflow.json`](moss-layout-ydr-moss-workflow.json) in ComfyUI after installing MOSS Layout YDR and the MOSS-Image nodes. This is the workflow supplied for the project, with its original graph and saved node state.
+Open [`moss-layout-ydr-moss-workflow.json`](moss-layout-ydr-moss-workflow.json) in ComfyUI after installing MOSS Layout YDR and the MOSS-Image nodes. This is the workflow supplied for the project, with its saved layout state.
 
 Model checkpoints and any other custom nodes required by the workflow must be installed separately.
 

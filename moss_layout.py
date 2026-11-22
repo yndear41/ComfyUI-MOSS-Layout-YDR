@@ -251,12 +251,12 @@ def parse_layout_text(value):
 
 
 def normalize_items(source, width, height, source_width=None, source_height=None,
-                    bbox_coord_space="abs", bbox_format="xyxy", include_source_indices=False):
+                    bbox_coord_space="abs", bbox_format="xyxy"):
     raw_items = source.get("items", []) if isinstance(source, dict) else []
     if not isinstance(raw_items, list):
         return []
     items = []
-    for source_index, entry in enumerate(raw_items):
+    for entry in raw_items:
         if not isinstance(entry, dict):
             continue
         label = entry.get("label", "object")
@@ -300,8 +300,6 @@ def normalize_items(source, width, height, source_width=None, source_height=None
             continue
         item = {"label": label, "caption": caption,
                 "bbox": [int(round(x1)), int(round(y1)), int(round(x2)), int(round(y2))]}
-        if include_source_indices:
-            item["_source_index"] = source_index
         exact_text = entry.get("text")
         if exact_text is not None:
             exact_text = str(exact_text)
@@ -380,85 +378,6 @@ def build_moss_elements(items, width, height):
         if item["label"] == "character":
             character_indices.append(str(index))
     return elements, ", ".join(character_indices)
-
-
-def _translation_segments(summary_caption, meta, items):
-    segments = []
-    if isinstance(summary_caption, str) and summary_caption.strip():
-        segments.append({"id": "summary.caption", "text": summary_caption})
-    for index, value in enumerate(meta if isinstance(meta, list) else []):
-        if isinstance(value, str) and value.strip():
-            segments.append({"id": f"summary.meta.{index}", "text": value})
-    for index, item in enumerate(items if isinstance(items, list) else []):
-        if not isinstance(item, dict):
-            continue
-        for field in ("caption", "text"):
-            value = item.get(field)
-            if isinstance(value, str) and value.strip():
-                segments.append({"id": f"item.{index}.{field}", "text": value.strip() if field == "caption" else value})
-        tags = item.get("tags", [])
-        if isinstance(tags, list):
-            for tag_index, value in enumerate(tags):
-                if isinstance(value, str) and value.strip():
-                    segments.append({"id": f"item.{index}.tags.{tag_index}", "text": value})
-    return segments
-
-
-def _apply_translated_values(document, translated_state, summary_caption, meta,
-                             source_items=None, compiled_source_indices=None):
-    if not isinstance(translated_state, dict) or translated_state.get("status") != "ready":
-        return None
-    values = translated_state.get("values")
-    settings = translated_state.get("settings")
-    if not isinstance(values, dict) or not isinstance(settings, dict):
-        return None
-    try:
-        from .translation_api import source_key
-        text_items = source_items if isinstance(source_items, list) else document.get("items", [])
-        current_key = source_key(_translation_segments(summary_caption, meta, text_items), settings)
-    except Exception:
-        return None
-    if current_key != translated_state.get("source_key"):
-        return None
-    translated_document = json.loads(json.dumps(document, ensure_ascii=False))
-    summary = translated_document.get("summary", {})
-    value = values.get("summary.caption")
-    if isinstance(value, str):
-        summary["caption"] = value
-    meta_override = values.get("summary.meta_override")
-    if isinstance(meta_override, str):
-        summary["meta"] = [part.strip() for part in meta_override.split(",") if part.strip()]
-    elif isinstance(meta_override, list) and all(isinstance(entry, str) for entry in meta_override):
-        summary["meta"] = meta_override
-    else:
-        for index, original in enumerate(meta):
-            value = values.get(f"summary.meta.{index}")
-            if isinstance(value, str):
-                translated_meta = summary.setdefault("meta", list(meta))
-                if index < len(translated_meta):
-                    translated_meta[index] = value
-    for index, item in enumerate(translated_document.get("items", [])):
-        source_index = compiled_source_indices[index] if compiled_source_indices and index < len(compiled_source_indices) else index
-        for field in ("caption", "text"):
-            value = values.get(f"item.{source_index}.{field}")
-            if isinstance(value, str):
-                if field == "text" and not value.strip():
-                    item.pop(field, None)
-                    continue
-                item[field] = value
-        tags = item.get("tags")
-        tags_override = values.get(f"item.{source_index}.tags_override")
-        if isinstance(tags_override, list) and all(isinstance(entry, str) for entry in tags_override):
-            if tags_override:
-                item["tags"] = tags_override
-            else:
-                item.pop("tags", None)
-        elif isinstance(tags, list):
-            for tag_index in range(len(tags)):
-                value = values.get(f"item.{source_index}.tags.{tag_index}")
-                if isinstance(value, str):
-                    tags[tag_index] = value
-    return translated_document
 
 
 class MOSSLayoutComposer:
@@ -608,16 +527,13 @@ class MOSSLayoutComposer:
                     mapped_items.append(mapped)
             normalize_source["items"] = mapped_items
 
-        indexed_items = normalize_items(
+        items = normalize_items(
             normalize_source, width, height,
             source_width=source_width if imported_layout else None,
             source_height=source_height if imported_layout else None,
             bbox_coord_space=source.get("bbox_coord_space", "abs") if isinstance(source, dict) else "abs",
             bbox_format=source.get("bbox_format", "xyxy") if isinstance(source, dict) else "xyxy",
-            include_source_indices=True,
         )
-        source_item_indices = [item.pop("_source_index") for item in indexed_items]
-        items = indexed_items
         imported_summary = imported_layout and "summary" in source
         if imported_summary:
             summary_caption = str(source_summary.get("caption", "")).strip() or (summary or "").strip()
@@ -647,50 +563,6 @@ class MOSSLayoutComposer:
             "summary": summary_object,
             "items": items,
         }
-        # A connected layout is normalized into the same compact item array the
-        # editor displays, so translation IDs match the visible box order.
-        source_text_items = items if layout_input_active else (
-            source.get("items", []) if isinstance(source, dict) else []
-        )
-        auto_translate = saved_editor_state.get("autoTranslate") is True
-        did_translate = False
-        translation_settings = saved_editor_state.get("translationSettings")
-        if not isinstance(translation_settings, dict):
-            translation_settings = {}
-        if auto_translate:
-            translation_settings = {
-                "source_language": translation_settings.get("source_language", "Auto Detect"),
-                "target_language": translation_settings.get("target_language", "English"),
-                "model_size": translation_settings.get("model_size", "4B"),
-                "device": translation_settings.get("device", "default"),
-                "prompt_mode": translation_settings.get("prompt_mode", "auto"),
-                "max_new_tokens": translation_settings.get("max_new_tokens", 0),
-                "max_input_tokens": translation_settings.get("max_input_tokens", 0),
-                "quantization": translation_settings.get("quantization", "none"),
-                "keep_model_loaded": translation_settings.get("keep_model_loaded", True),
-            }
-            translation_segments = _translation_segments(summary_caption, meta, source_text_items)
-            if translation_segments:
-                try:
-                    from .translation_api import translate_segments
-                    translation_result = translate_segments(translation_segments, translation_settings)
-                    translated_document = _apply_translated_values(
-                        document, translation_result, summary_caption, meta,
-                        source_items=source_text_items,
-                        compiled_source_indices=None if layout_input_active else source_item_indices,
-                    )
-                    if translated_document is None:
-                        raise RuntimeError("The translated fields did not match the current MOSS layout.")
-                    document = translated_document
-                    items = document["items"]
-                    summary_object = document["summary"]
-                    summary_caption = str(summary_object.get("caption", ""))
-                    meta = summary_object.get("meta", []) if isinstance(summary_object.get("meta", []), list) else []
-                    saved_editor_state["translationSettings"] = translation_result.get("settings", translation_settings)
-                    did_translate = True
-                except Exception as exc:
-                    raise RuntimeError(f"MOSS Layout YDR automatic translation failed: {exc}") from exc
-
         encoded = json.dumps(document, ensure_ascii=False, separators=(",", ":"))
         prompt = compile_moss_prompt(document)
         moss_elements, character_boxes = build_moss_elements(items, width, height)
@@ -738,25 +610,9 @@ class MOSSLayoutComposer:
                 "has_summary": imported_layout and "summary" in source,
                 "has_dimensions": imported_dimensions,
                 "input_hash": layout_input_hash,
-                "clear_suppression": not did_translate,
-                "suppress_input": did_translate,
+                "clear_suppression": True,
+                "suppress_input": False,
             }]
-        if did_translate:
-            if layout_input_active:
-                ui["moss_layout_import"][-1]["has_summary"] = True
-            else:
-                ui["moss_layout_replace"] = [{
-                    "summary": summary_object.get("caption", ""),
-                    "meta": meta,
-                    "items": [
-                        {
-                            "source_index": source_item_indices[index] if index < len(source_item_indices) else index,
-                            **{key: item[key] for key in ("caption", "text", "tags") if key in item},
-                        }
-                        for index, item in enumerate(items)
-                    ],
-                    "translation_settings": saved_editor_state.get("translationSettings", translation_settings),
-                }]
         image = background_resize if background_resize is not None else background
         if image is not None:
             # Echo an IMAGE preview so the node can paint wired backgrounds without adding an
@@ -777,4 +633,3 @@ class MOSSLayoutComposer:
             "ui": ui,
             "result": result,
         }
-
